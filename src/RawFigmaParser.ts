@@ -75,6 +75,12 @@ export class RawFigmaParser {
             width: Math.round(box.width),
             height: Math.round(box.height),
             rotation: rotation,
+            renderBounds: node.absoluteRenderBounds ? {
+                x: node.absoluteRenderBounds.x - box.x,
+                y: node.absoluteRenderBounds.y - box.y,
+                width: node.absoluteRenderBounds.width,
+                height: node.absoluteRenderBounds.height
+            } : undefined,
             styles: this.mapStyles(node),
             customProps: {
                 fillGeometry: node.fillGeometry,
@@ -86,6 +92,32 @@ export class RawFigmaParser {
             children: [],
             text: node.characters
         };
+
+        // 💡 进阶逻辑：针对 Frame/Component 本身的背景填充，如果不是单色，则插入一个虚拟的背景节点
+        const fillType = uiNode.styles.fillType;
+        const hasComplexFills = (node.fills && node.fills.some((f: any) => f.visible !== false && f.type !== 'SOLID')) || 
+            (node.background && node.background.some((f: any) => f.visible !== false && f.type !== 'SOLID'));
+
+        if ((uiNode.type === ObjectType.Component || uiNode.type === ObjectType.Group) && hasComplexFills) {
+            const bgNode: UINode = {
+                id: uiNode.id + '_bg',
+                name: uiNode.name + '_bg',
+                type: ObjectType.Image, // 强制作为图像导出为 SVG
+                x: 0,
+                y: 0,
+                width: uiNode.width,
+                height: uiNode.height,
+                customProps: {
+                    fillGeometry: [{ path: `M0 0L${uiNode.width} 0L${uiNode.width} ${uiNode.height}L0 ${uiNode.height}L0 0Z`, windingRule: 'NONZERO' }],
+                    isMask: false
+                },
+                styles: { ...uiNode.styles, fillType: 'solid' }, // 保持原有样式，但标记为 solid 触发渲染映射
+                children: []
+            };
+            // 修正父节点样式，防止底层 FGUI 渲染出一个多余的颜色
+            uiNode.styles.fillColor = 'transparent';
+            uiNode.children!.push(bgNode);
+        }
 
         if (node.children) {
             node.children.forEach((child: any) => {
