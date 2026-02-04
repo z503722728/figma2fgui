@@ -1,0 +1,8 @@
+node_modules/
+bun.lock
+output/
+input/
+.env
+.DS_Store
+dist/
+*.log

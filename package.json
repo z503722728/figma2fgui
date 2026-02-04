@@ -1,0 +1,18 @@
+{
+  "name": "figma2fgui",
+  "version": "1.0.0",
+  "description": "Figma JSON to FairyGUI converter",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "test": "node test/test_convert.js"
+  },
+  "dependencies": {
+    "axios": "^1.13.4",
+    "dotenv": "^17.2.3",
+    "fs-extra": "^11.2.0",
+    "xmlbuilder": "^15.1.1",
+    "xmlbuilder2": "^3.1.1",
+    "yoga-layout": "^3.2.1"
+  }
+}
