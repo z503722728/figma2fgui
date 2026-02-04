@@ -25,6 +25,10 @@ export class PropertyMapper {
             attr.alpha = s.opacity;
         }
 
+        if (node.rotation) {
+            attr.rotation = node.rotation.toString();
+        }
+
         // 2. Type-specific Mapping
         switch (node.type) {
             case ObjectType.Text:

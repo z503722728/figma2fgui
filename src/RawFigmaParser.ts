@@ -42,9 +42,15 @@ export class RawFigmaParser {
         // 坐标转换：优先使用 relativeTransform (更精准的本地坐标)，降级使用 absoluteBoundingBox
         let localX: number;
         let localY: number;
+        let rotation = 0;
 
         if (node.relativeTransform && !isRoot) {
-            // relativeTransform is [[cos, -sin, tx], [sin, cos, ty]]
+            // relativeTransform is [[a, b, tx], [c, d, ty]]
+            // a=cos(theta), b=-sin(theta), c=sin(theta), d=cos(theta)
+            const a = node.relativeTransform[0][0];
+            const c = node.relativeTransform[1][0];
+            rotation = Math.round(Math.atan2(c, a) * (180 / Math.PI));
+
             localX = node.relativeTransform[0][2];
             localY = node.relativeTransform[1][2];
         } else {
@@ -52,17 +58,12 @@ export class RawFigmaParser {
             localY = isRoot ? 0 : box.y - parentAbsY;
         }
 
+        // 💡 针对旋转节点的坐标修正：Figma 的 tx/ty 是旋转后的左上角，FGUI 需要中心点或未旋转前的坐标？
+        // 实际上 FGUI 的 xy 配合 rotation 表现与 Figma 的 relativeTransform tx/ty 较一致（左上角旋转）
+
         // 💡 Pragmatic Fix: Snap small offsets to 0 to fix "0,-2" type issues logic
-        // Often Figma text boxes bleed slightly due to line-height/metrics.
         if (Math.abs(localX) < 3.5) localX = 0;
         if (Math.abs(localY) < 3.5) localY = 0;
-
-        if (node.name.includes("Bridge") || node.characters === "Shapes") {
-            console.log(`[ParserDebug] Node: ${node.name} (${node.id})`);
-            console.log(`  Raw RelativeTransform Y: ${node.relativeTransform?.[1]?.[2]}`);
-            console.log(`  Calculated localY: ${localY}`);
-            console.log(`  Snapped? ${Math.abs(node.relativeTransform?.[1]?.[2]) < 3.5}`);
-        }
 
         const uiNode: UINode = {
             id: 'n' + (node.id ? node.id.replace(/[^a-zA-Z0-9]/g, '_') : Math.random().toString(36).substring(2, 5)), 
@@ -73,11 +74,14 @@ export class RawFigmaParser {
             y: Math.round(localY),
             width: Math.round(box.width),
             height: Math.round(box.height),
+            rotation: rotation,
             styles: this.mapStyles(node),
             customProps: {
                 fillGeometry: node.fillGeometry,
                 strokeGeometry: node.strokeGeometry,
-                vectorPaths: node.vectorPaths
+                vectorPaths: node.vectorPaths,
+                isMask: node.isMask,
+                maskType: node.maskType
             },
             children: [],
             text: node.characters
@@ -94,14 +98,13 @@ export class RawFigmaParser {
 
     private mapType(node: any): ObjectType {
         const type = node.type;
-        // 💡 进阶逻辑：如果 VECTOR/STAR 等节点包含复杂矢量数据，且不是简单的图形，则标记为 Image
-        if (type === 'VECTOR' || type === 'STAR' || type === 'REGULAR_POLYGON' || type === 'BOOLEAN_OPERATION') {
+        // 💡 进阶逻辑：将所有具有矢量潜力的节点映射为 Image，以便生成 SVG 保证还原度
+        if (type === 'VECTOR' || type === 'STAR' || type === 'REGULAR_POLYGON' || type === 'BOOLEAN_OPERATION' ||
+            type === 'RECTANGLE' || type === 'ELLIPSE') {
             return ObjectType.Image;
         }
         switch (type) {
             case 'TEXT': return ObjectType.Text;
-            case 'RECTANGLE': return ObjectType.Graph;
-            case 'ELLIPSE': return ObjectType.Graph;
             case 'FRAME': case 'INSTANCE': case 'COMPONENT': return ObjectType.Component;
             case 'GROUP': return ObjectType.Group;
             default: return ObjectType.Graph;
@@ -112,20 +115,49 @@ export class RawFigmaParser {
         const styles: any = {};
 
         // 1. 处理填充 (Fills)
-        if (node.fills && node.fills.length > 0) {
-            const fill = node.fills[0];
-            if (fill.type === 'SOLID') {
+        if (node.fills && Array.isArray(node.fills)) {
+            const visibleFills = node.fills.filter((f: any) => f.visible !== false);
+            
+            // 实色填充
+            const solidFill = visibleFills.find((f: any) => f.type === 'SOLID');
+            if (solidFill) {
                 styles.fillType = 'solid';
-                styles.fillColor = this.figmaColorToHex(fill.color, fill.opacity);
-            } else if (fill.type === 'IMAGE') {
-                styles.fillType = 'image';
-            } else if (fill.type.includes('GRADIENT')) {
-                styles.fillType = 'image'; // 渐变也强制导出为图片，保证 FGUI 渲染一致性
+                styles.fillColor = this.figmaColorToHex(solidFill.color);
+                styles.fillOpacity = solidFill.opacity ?? 1;
+            }
+
+            // 渐变填充
+            const gradientFill = visibleFills.find((f: any) => f.type.includes('GRADIENT'));
+            if (gradientFill) {
+                styles.gradient = {
+                    type: gradientFill.type, // GRADIENT_LINEAR or GRADIENT_RADIAL
+                    handles: gradientFill.gradientHandlePositions,
+                    stops: gradientFill.gradientStops.map((s: any) => ({
+                        color: this.figmaColorToHex(s.color),
+                        opacity: s.color.a ?? 1,
+                        offset: s.position
+                    }))
+                };
+                // 降级颜色
+                if (!styles.fillColor && gradientFill.gradientStops.length > 0) {
+                    styles.fillColor = this.figmaColorToHex(gradientFill.gradientStops[0].color);
+                    styles.fillOpacity = gradientFill.gradientStops[0].color.a ?? 1;
+                }
+            }
+
+            // 图片填充
+            const imageFill = visibleFills.find((f: any) => f.type === 'IMAGE');
+            if (imageFill) {
+                styles.imageFill = {
+                    imageHash: imageFill.imageHash,
+                    scaleMode: imageFill.scaleMode
+                };
             }
         }
 
-        // 💡 矢量节点强制设为 image 填充类型，触发后续的 REST API 渲染下载
-        if (node.type === 'VECTOR' || node.type === 'STAR' || node.type === 'REGULAR_POLYGON' || node.type === 'BOOLEAN_OPERATION') {
+        // 💡 矢量节点强制设为 image 填充类型，触发后续的 REST API 渲染下载 (作为回退或元数据)
+        if (node.type === 'VECTOR' || node.type === 'STAR' || node.type === 'REGULAR_POLYGON' || node.type === 'BOOLEAN_OPERATION' ||
+            node.type === 'RECTANGLE' || node.type === 'ELLIPSE') {
             styles.fillType = 'image';
         }
 
@@ -133,6 +165,22 @@ export class RawFigmaParser {
         if (node.strokes && node.strokes.length > 0) {
             styles.strokeSize = node.strokeWeight || 1;
             styles.strokeColor = this.figmaColorToHex(node.strokes[0].color);
+            styles.strokeOpacity = node.strokes[0].opacity ?? 1;
+        }
+
+        // 2.1 处理滤镜 (Effects: Shadows, Blurs)
+        if (node.effects && Array.isArray(node.effects)) {
+            const visibleEffects = node.effects.filter((e: any) => e.visible !== false);
+            if (visibleEffects.length > 0) {
+                styles.filters = visibleEffects.map((e: any) => ({
+                    type: e.type, // DROP_SHADOW, INNER_SHADOW, LAYER_BLUR, BACKGROUND_BLUR
+                    color: e.color ? this.figmaColorToHex(e.color) : null,
+                    opacity: e.color ? (e.color.a ?? 1) : 1,
+                    offset: e.offset,
+                    radius: e.radius,
+                    spread: e.spread
+                }));
+            }
         }
 
         // 3. 处理圆角

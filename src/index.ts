@@ -182,33 +182,144 @@ async function main() {
             const height = node.height;
             let svgBody = "";
 
+            // 💡 提取 Defs 信息
+            const defs: string[] = [];
+            const addGradient = (g: any, id: string) => {
+                if (g.type === 'GRADIENT_LINEAR') {
+                    const stops = g.stops.map((s: any) => `<stop offset="${s.offset * 100}%" stop-color="${s.color}" stop-opacity="${s.opacity}" />`).join('');
+                    const h1 = g.handles[0];
+                    const h2 = g.handles[1];
+                    defs.push(`<linearGradient id="${id}" x1="${h1.x * 100}%" y1="${h1.y * 100}%" x2="${h2.x * 100}%" y2="${h2.y * 100}%">${stops}</linearGradient>`);
+                } else if (g.type === 'GRADIENT_RADIAL') {
+                    const stops = g.stops.map((s: any) => `<stop offset="${s.offset * 100}%" stop-color="${s.color}" stop-opacity="${s.opacity}" />`).join('');
+                    const h1 = g.handles[0]; // Center
+                    const h2 = g.handles[1]; // Focus/Edge
+                    defs.push(`<radialGradient id="${id}" cx="${h1.x * 100}%" cy="${h1.y * 100}%" r="50%" fx="${h1.x * 100}%" fy="${h1.y * 100}%">${stops}</radialGradient>`);
+                }
+            };
+            const addFilter = (filters: any[], id: string) => {
+                let filterBody = "";
+                filters.forEach((f, i) => {
+                    if (f.type === 'DROP_SHADOW') {
+                        filterBody += `<feGaussianBlur in="SourceAlpha" stdDeviation="${f.radius / 2}" result="blur${i}"/>
+                        <feOffset in="blur${i}" dx="${f.offset.x}" dy="${f.offset.y}" result="offsetBlur${i}"/>
+                        <feFlood flood-color="${f.color}" flood-opacity="${f.opacity}" result="color${i}"/>
+                        <feComposite in="color${i}" in2="offsetBlur${i}" operator="in" result="shadow${i}"/>
+                        <feMerge result="merge${i}">
+                            <feMergeNode in="shadow${i}"/>
+                            <feMergeNode in="SourceGraphic"/>
+                        </feMerge>`;
+                    } else if (f.type === 'LAYER_BLUR') {
+                        filterBody += `<feGaussianBlur in="SourceGraphic" stdDeviation="${f.radius / 2}" />`;
+                    }
+                });
+                defs.push(`<filter id="${id}" x="-20%" y="-20%" width="140%" height="140%">${filterBody}</filter>`);
+            };
+            const addImagePattern = (imgFill: any, id: string, w: number, h: number) => {
+                // 💡 尝试找到对应的本地文件名 (基于 Hash 或之前的 ResourceInfo)
+                const res = allResources.find(r => r.type === 'image' && r.id.includes(imgFill.imageHash));
+                const imgUrl = res ? `img/${res.name}` : `img/missing_${imgFill.imageHash}.png`;
+                defs.push(`
+                <pattern id="${id}" patternUnits="userSpaceOnUse" width="${w}" height="${h}">
+                    <image href="${imgUrl}" x="0" y="0" width="${w}" height="${h}" preserveAspectRatio="xMidYMid slice" />
+                </pattern>`);
+            }
+
             // Case A: Merged Paths (from VectorMerger)
             if (node.customProps.mergedPaths) {
                 const paths = node.customProps.mergedPaths;
-                svgBody = paths.map((p: any) => {
+                let currentClipId = ""; 
+                svgBody = paths.map((p: any, idx: number) => {
+                    const pathId = `p${idx}`;
+                    let fillAttr = `fill="${p.fillColor}"`;
+                    let filterAttr = "";
+
+                    let clipAttr = currentClipId ? ` clip-path="url(#${currentClipId})"` : "";
+
+                    if (p.isMask) {
+                        const clipId = `${pathId}_clip`;
+                        const clipPathData = p.type === 'rect' 
+                            ? `<rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" rx="${p.cornerRadius}" />`
+                            : `<path d="${p.path}" transform="translate(${p.x},${p.y})" />`;
+                        defs.push(`<clipPath id="${clipId}">${clipPathData}</clipPath>`);
+                        currentClipId = clipId;
+                        clipAttr = ""; // 💡 遮罩节点自身不被剪裁，通常它也是容器背景
+                    }
+                    const rotAttr = p.rotation ? ` rotate(${p.rotation})` : "";
+                    const transformAttr = ` transform="translate(${p.x},${p.y})${rotAttr}"`;
+
+                    if (p.gradient) {
+                        const gradId = `${pathId}_grad`;
+                        addGradient(p.gradient, gradId);
+                        fillAttr = `fill="url(#${gradId})"`;
+                    } else if (p.imageFill) {
+                        const imgId = `${pathId}_img`;
+                        addImagePattern(p.imageFill, imgId, node.width, node.height);
+                        fillAttr = `fill="url(#${imgId})"`;
+                    }
+
+                    if (p.filters) {
+                        const filtId = `${pathId}_filt`;
+                        addFilter(p.filters, filtId);
+                        filterAttr = `filter="url(#${filtId})"`;
+                    }
+
+                    const fo = p.fillOpacity !== undefined ? ` fill-opacity="${p.fillOpacity}"` : "";
+                    const so = p.strokeOpacity !== undefined ? ` stroke-opacity="${p.strokeOpacity}"` : "";
+                    
                     if (p.type === 'rect') {
-                        return `<rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" fill="${p.fillColor}" rx="${p.cornerRadius}" />`;
+                        return `<rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" ${fillAttr}${fo} rx="${p.cornerRadius}" ${filterAttr}${clipAttr}${p.rotation ? ` transform="rotate(${p.rotation}, ${p.x + p.width / 2}, ${p.y + p.height / 2})"` : ""} />`;
                     } else { // path
-                        return `<path d="${p.path}" transform="translate(${p.x},${p.y})" fill="${p.fillColor}" stroke="${p.strokeColor || 'none'}" stroke-width="${p.strokeSize || 0}" />`;
+                        return `<path d="${p.path}" ${transformAttr} ${fillAttr}${fo} stroke="${p.strokeColor || 'none'}"${so} stroke-width="${p.strokeSize || 0}" ${filterAttr}${clipAttr} />`;
                     }
                 }).join('\n');
             } 
             // Case B: Single Path (Original Logic)
             else if (node.customProps.fillGeometry) {
                 const paths = node.customProps.fillGeometry;
-                const fillColor = node.styles.fillColor || "#000000";
+                let fillAttr = `fill="${node.styles.fillColor || "none"}"`;
+                let filterAttr = "";
+                let clipAttr = "";
+
+                if (node.styles.gradient) {
+                    const gradId = `sn_grad`;
+                    addGradient(node.styles.gradient, gradId);
+                    fillAttr = `fill="url(#${gradId})"`;
+                } else if (node.styles.imageFill) {
+                    const imgId = `sn_img`;
+                    addImagePattern(node.styles.imageFill, imgId, width, height);
+                    fillAttr = `fill="url(#${imgId})"`;
+                }
+
+                if (node.styles.filters) {
+                    const filtId = `sn_filt`;
+                    addFilter(node.styles.filters as any, filtId);
+                    filterAttr = `filter="url(#${filtId})"`;
+                }
+
+                // 💡 Case B (单节点) 的旋转已经由 FGUI XML 属性承载，SVG 内部无需旋转
+                // const rotAttr = node.rotation ? ` transform="rotate(${node.rotation}, ${width / 2}, ${height / 2})"` : "";
+                const rotAttr = "";
+
+                const fillOpacity = node.styles.fillOpacity !== undefined ? ` fill-opacity="${node.styles.fillOpacity}"` : "";
+                const strokeColor = node.styles.strokeColor || "none";
+                const strokeOpacity = node.styles.strokeOpacity !== undefined ? ` stroke-opacity="${node.styles.strokeOpacity}"` : "";
+                const strokeSize = node.styles.strokeSize || 0;
+                
                 let pathData = "";
                 if (Array.isArray(paths)) {
                     pathData = paths.map((p: any) => p.path).join(' ');
                 }
                 if (pathData) {
-                    svgBody = `<path d="${pathData}" fill="${fillColor}"/>`;
+                    svgBody = `<path d="${pathData}" ${fillAttr}${fillOpacity} stroke="${strokeColor}"${strokeOpacity} stroke-width="${strokeSize}" ${filterAttr}${rotAttr} />`;
                 }
             }
 
             if (svgBody) {
+                const defsContent = defs.length > 0 ? `<defs>${defs.join('')}</defs>` : "";
                 const svgContent = `
 <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" fill="none" xmlns="http://www.w3.org/2000/svg">
+${defsContent}
 ${svgBody}
 </svg>`;
                 await fs.writeFile(localPath, svgContent.trim());

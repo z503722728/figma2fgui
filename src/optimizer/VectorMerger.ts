@@ -34,7 +34,6 @@ export class VectorMerger {
     private canMerge(node: UINode): boolean {
         if (!node.children || node.children.length === 0) return false; 
 
-        let allValid = true;
         for (const child of node.children) {
             const hasFillPaths = Array.isArray(child.customProps?.fillGeometry) && child.customProps.fillGeometry.length > 0;
             const hasMergedPaths = Array.isArray(child.customProps?.mergedPaths) && child.customProps.mergedPaths.length > 0;
@@ -43,67 +42,33 @@ export class VectorMerger {
             const isVectorType = child.type === ObjectType.Image || child.type === ObjectType.Graph || child.type === ObjectType.Component || child.type === ObjectType.Group;
             const hasText = child.type === ObjectType.Text || (child.text && child.text.trim().length > 0);
             
-            // 💡 Ghost Node Logic: If it has NO paths, NO text, and NO children, we can ignore it.
-            // It's likely a layout guide or empty vector.
+            // Ghost Node Logic: If it has NO paths, NO text, and NO children, we can ignore it.
             const isGhostNode = !hasPaths && !hasText && (!child.children || child.children.length === 0);
 
-            if (isGhostNode) {
-                continue; // Skip ghost nodes, they don't block anything
-            }
+            if (isGhostNode) continue;
 
             if (!isVectorType || !hasPaths || hasText) {
-                allValid = false;
-                break;
+                return false;
             }
         }
-
-        if (!allValid && (node.name.includes("AvatarRender") || node.children.length > 5)) {
-            console.log(`  [VectorMerger] 🚫 Node '${node.name}' (${node.id}) cannot merge. Child Breakdown:`);
-            node.children.forEach(c => {
-                const hf = Array.isArray(c.customProps?.fillGeometry) && c.customProps.fillGeometry.length > 0;
-                const hm = Array.isArray(c.customProps?.mergedPaths) && c.customProps.mergedPaths.length > 0;
-                console.log(`    - '${c.name}' (${c.id}): Type=${ObjectType[c.type]}, hasPaths=${hf || hm}, isGhost=${!hf && !hm && (!c.children || c.children.length === 0)}`);
-            });
-        }
-
-        return allValid;
+        return true;
     }
 
     private performMerge(node: UINode): void {
-        console.log(`🌪️ [VectorMerger] Merging ${node.children.length} vectors in '${node.name}' (${node.id}) into single SVG.`);
+        console.log(`🌪️ [VectorMerger] Merging ${node.children.length} vectors in '${node.name}' into single SVG.`);
 
         const mergedPaths: any[] = [];
 
-        // 1. If Parent has background, add it as a base path
-        // 💡 Fix: Ignore container background for merged vectors (user wants transparent icons generally)
-        /*
-        if (node.styles.fillColor && node.styles.fillType === 'solid') {
-             mergedPaths.push({
-                 type: 'rect',
-                 x: 0,
-                 y: 0,
-                 width: node.width,
-                 height: node.height,
-                 fillColor: node.styles.fillColor,
-                 cornerRadius: node.styles.cornerRadius || 0
-             });
-        }
-        */
-
-        // 2. Collect Child Paths
+        // 1. Collect Child Paths
         for (const child of node.children) {
             const childX = child.x;
             const childY = child.y;
             
-            // 💡 Fix: Prioritize already merged paths (nested flattenings)
-            // AND ensure fillGeometry actually has content.
             const hasFillPaths = Array.isArray(child.customProps?.fillGeometry) && child.customProps.fillGeometry.length > 0;
             const hasMergedPaths = Array.isArray(child.customProps?.mergedPaths) && child.customProps.mergedPaths.length > 0;
 
             if (hasMergedPaths) {
-                // Already merged child (nested flattened group)
                 const childPaths = child.customProps.mergedPaths;
-                console.log(`  [VectorMerger] Collecting ${childPaths.length} already merged paths from '${child.name}' (${child.id})`);
                 childPaths.forEach((p: any) => {
                     mergedPaths.push({
                         ...p,
@@ -112,34 +77,38 @@ export class VectorMerger {
                     });
                 });
             } else if (hasFillPaths) {
-                // Single Vector or Graph Child
                 const paths = child.customProps.fillGeometry;
-                console.log(`  [VectorMerger] Collecting ${paths.length} paths from geometry in '${child.name}' (${child.id})`);
                 paths.forEach((p: any) => {
+                    // 💡 Improved: Default to 'none' if no fill/stroke to avoid solid black
+                    const fillColor = child.styles.fillColor || "none";
+                    const strokeColor = child.styles.strokeColor || "none";
+                    
                     mergedPaths.push({
                         type: 'path',
                         path: p.path,
                         x: childX,
                         y: childY,
-                        fillColor: child.styles.fillColor || (child.type === ObjectType.Graph ? "#FFFFFF" : "#000000"), // Default to white for graphs if no color
-                        strokeColor: child.styles.strokeColor,
-                        strokeSize: child.styles.strokeSize
+                        fillColor: fillColor,
+                        fillOpacity: child.styles.fillOpacity ?? 1,
+                        strokeColor: strokeColor,
+                        strokeOpacity: child.styles.strokeOpacity ?? 1,
+                        strokeSize: child.styles.strokeSize || 0,
+                        gradient: child.styles.gradient,
+                        filters: child.styles.filters,
+                        imageFill: child.styles.imageFill,
+                        rotation: child.rotation,
+                        isMask: child.customProps.isMask,
+                        maskType: child.customProps.maskType
                     });
                 });
-            } else {
-                console.log(`  [VectorMerger] ⚠️ Child '${child.name}' (${child.id}) (Type: ${ObjectType[child.type]}) contribution skipped (no data).`);
             }
         }
 
-        // 3. Transform Node
+        // 2. Transform Node
         node.type = ObjectType.Image;
         node.customProps.mergedPaths = mergedPaths;
-        console.log(`  [VectorMerger] ✅ Node '${node.name}' (${node.id}) transformed to Image with ${mergedPaths.length} paths.`);
-        
-        node.children = []; // Remove children
-        node.asComponent = false; // Prevent sub-component extraction
-        
-        // 4. Update Styles
-        node.styles.fillType = 'image'; // Mark as image for layout engines logic
+        node.children = []; 
+        node.asComponent = false; 
+        node.styles.fillType = 'image';
     }
 }
