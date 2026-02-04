@@ -228,26 +228,31 @@ async function main() {
             // Case A: Merged Paths (from VectorMerger)
             if (node.customProps.mergedPaths) {
                 const paths = node.customProps.mergedPaths;
-                let currentClipId = ""; 
-                svgBody = paths.map((p: any, idx: number) => {
+                let currentMaskId = ""; 
+                const renderedPaths: string[] = [];
+
+                paths.forEach((p: any, idx: number) => {
                     const pathId = `p${idx}`;
                     let fillAttr = `fill="${p.fillColor}"`;
                     let filterAttr = "";
 
-                    let clipAttr = currentClipId ? ` clip-path="url(#${currentClipId})"` : "";
-
+                    // 1. Handle Mask Definition
                     if (p.isMask) {
-                        const clipId = `${pathId}_clip`;
-                        const clipPathData = p.type === 'rect' 
-                            ? `<rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" rx="${p.cornerRadius}" />`
-                            : `<path d="${p.path}" transform="translate(${p.x},${p.y})" />`;
-                        defs.push(`<clipPath id="${clipId}">${clipPathData}</clipPath>`);
-                        currentClipId = clipId;
-                        clipAttr = ""; // 💡 遮罩节点自身不被剪裁，通常它也是容器背景
+                        const maskId = `${pathId}_mask`;
+                        const maskPathData = p.type === 'rect' 
+                            ? `<rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" rx="${p.cornerRadius}" fill="white" />`
+                            : `<path d="${p.path}" transform="translate(${p.x},${p.y})" fill="white" />`;
+                        
+                        // 💡 SVG Mask: Black hides, White shows.
+                        // 💡 maskUnits="userSpaceOnUse" is CRITICAL for global coordinate alignment.
+                        defs.push(`<mask id="${maskId}" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse"><rect width="100%" height="100%" fill="black" />${maskPathData}</mask>`);
+                        
+                        if (currentMaskId) renderedPaths.push(`</g>`);
+                        currentMaskId = maskId;
+                        renderedPaths.push(`<g mask="url(#${maskId})">`);
                     }
-                    const rotAttr = p.rotation ? ` rotate(${p.rotation})` : "";
-                    const transformAttr = ` transform="translate(${p.x},${p.y})${rotAttr}"`;
 
+                    // 2. Prepare Path Styles
                     if (p.gradient) {
                         const gradId = `${pathId}_grad`;
                         addGradient(p.gradient, gradId);
@@ -268,11 +273,14 @@ async function main() {
                     const so = p.strokeOpacity !== undefined ? ` stroke-opacity="${p.strokeOpacity}"` : "";
                     
                     if (p.type === 'rect') {
-                        return `<rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" ${fillAttr}${fo} rx="${p.cornerRadius}" ${filterAttr}${clipAttr}${p.rotation ? ` transform="rotate(${p.rotation}, ${p.x + p.width / 2}, ${p.y + p.height / 2})"` : ""} />`;
+                        renderedPaths.push(`<rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" ${fillAttr}${fo} rx="${p.cornerRadius}" ${filterAttr}${p.rotation ? ` transform="rotate(${p.rotation}, ${p.x + p.width / 2}, ${p.y + p.height / 2})"` : ""} />`);
                     } else { // path
-                        return `<path d="${p.path}" ${transformAttr} ${fillAttr}${fo} stroke="${p.strokeColor || 'none'}"${so} stroke-width="${p.strokeSize || 0}" ${filterAttr}${clipAttr} />`;
+                        renderedPaths.push(`<path d="${p.path}" transform="translate(${p.x},${p.y})" ${fillAttr}${fo} stroke="${p.strokeColor || 'none'}"${so} stroke-width="${p.strokeSize || 0}" ${filterAttr} />`);
                     }
-                }).join('\n');
+                });
+
+                if (currentMaskId) renderedPaths.push(`</g>`);
+                svgBody = renderedPaths.join('\n');
             } 
             // Case B: Single Path (Original Logic)
             else if (node.customProps.fillGeometry) {
