@@ -26,7 +26,9 @@ export class RawFigmaParser {
             Object.values(figmaData.nodes).forEach((nodeData: any) => {
                 const node = nodeData.document;
                 if (node) {
-                    rootNodes.push(this.processNode(node, 0, 0, true));
+                    const rootNode = this.processNode(node, 0, 0, true);
+                    rootNode.asComponent = true; // 💡 顶级节点强制作为组件，防止被 Merger 误伤
+                    rootNodes.push(rootNode);
                 }
             });
         }

@@ -93,6 +93,8 @@ async function main() {
 
     const rawParser = new RawFigmaParser();
     rootNodes = rawParser.parse(figmaData);
+    console.log(`🌳 Initial root nodes: ${rootNodes.length}`);
+    rootNodes.forEach(rn => console.log(`  - Root: ${rn.name} (${ObjectType[rn.type]}), children: ${rn.children?.length}`));
 
     // --- 2. 布局计算 ---
     const calculator = new FlexLayoutCalculator();
@@ -102,11 +104,16 @@ async function main() {
     console.log("🌪️ 正在执行矢量合并优化...");
     const merger = new VectorMerger();
     merger.merge(rootNodes);
+    console.log(`🌳 Post-merger root nodes: ${rootNodes.length}`);
+    rootNodes.forEach(rn => console.log(`  - Root: ${rn.name} (${ObjectType[rn.type]}), children: ${rn.children?.length}`));
 
     // --- 3. 智能组件提取 ---
     console.log("🧩 正在执行智能组件提取...");
     const extractor = new SubComponentExtractor();
     const componentResources = extractor.extract(rootNodes);
+    console.log(`🧩 Extracted ${componentResources.length} components.`);
+    console.log(`🌳 Final root nodes (main project): ${rootNodes.length}`);
+    rootNodes.forEach(rn => console.log(`  - Root: ${rn.name} (${ObjectType[rn.type]}), children: ${rn.children?.length}`));
 
     // --- 4. 自动化图片下载 (Smart Cache) ---
     const allResources: ResourceInfo[] = [...componentResources];
