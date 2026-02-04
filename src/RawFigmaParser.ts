@@ -75,12 +75,6 @@ export class RawFigmaParser {
             width: Math.round(box.width),
             height: Math.round(box.height),
             rotation: rotation,
-            renderBounds: node.absoluteRenderBounds ? {
-                x: node.absoluteRenderBounds.x - box.x,
-                y: node.absoluteRenderBounds.y - box.y,
-                width: node.absoluteRenderBounds.width,
-                height: node.absoluteRenderBounds.height
-            } : undefined,
             styles: this.mapStyles(node),
             customProps: {
                 fillGeometry: node.fillGeometry,
