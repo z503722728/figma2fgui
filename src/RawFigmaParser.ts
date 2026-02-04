@@ -44,7 +44,7 @@ export class RawFigmaParser {
         const uiNode: UINode = {
             id: node.id,
             name: node.name.replace(/\s+/g, '_'),
-            type: this.mapType(node.type),
+            type: this.mapType(node),
             x: Math.round(localX),
             y: Math.round(localY),
             width: Math.round(box.width),
@@ -63,10 +63,16 @@ export class RawFigmaParser {
         return uiNode;
     }
 
-    private mapType(type: string): ObjectType {
+    private mapType(node: any): ObjectType {
+        const type = node.type;
+        // 💡 进阶逻辑：如果 VECTOR/STAR 等节点包含复杂矢量数据，且不是简单的图形，则标记为 Image
+        if (type === 'VECTOR' || type === 'STAR' || type === 'REGULAR_POLYGON' || type === 'BOOLEAN_OPERATION') {
+            return ObjectType.Image;
+        }
         switch (type) {
             case 'TEXT': return ObjectType.Text;
-            case 'RECTANGLE': case 'ELLIPSE': case 'VECTOR': case 'REGULAR_POLYGON': case 'STAR': return ObjectType.Graph;
+            case 'RECTANGLE': return ObjectType.Graph;
+            case 'ELLIPSE': return ObjectType.Graph;
             case 'FRAME': case 'INSTANCE': case 'COMPONENT': return ObjectType.Component;
             case 'GROUP': return ObjectType.Container;
             default: return ObjectType.Graph;
@@ -85,8 +91,13 @@ export class RawFigmaParser {
             } else if (fill.type === 'IMAGE') {
                 styles.fillType = 'image';
             } else if (fill.type.includes('GRADIENT')) {
-                styles.fillType = 'linear-gradient'; // 简化处理
+                styles.fillType = 'image'; // 渐变也强制导出为图片，保证 FGUI 渲染一致性
             }
+        }
+
+        // 💡 矢量节点强制设为 image 填充类型，触发后续的 REST API 渲染下载
+        if (node.type === 'VECTOR' || node.type === 'STAR' || node.type === 'REGULAR_POLYGON' || node.type === 'BOOLEAN_OPERATION') {
+            styles.fillType = 'image';
         }
 
         // 2. 处理边框
