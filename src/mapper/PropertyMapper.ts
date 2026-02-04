@@ -51,8 +51,26 @@ export class PropertyMapper {
         attr.color = this.formatColor(s.color || "#000000");
         
         // Alignment mapping
-        if (s['text-align'] || s.align) {
-            attr.align = (s['text-align'] || s.align) as AlignType;
+        if (s['text-align'] || s.align || s.textAlign) {
+            const alignVal = (s['text-align'] || s.align || s.textAlign).toLowerCase();
+            if (alignVal === 'center' || alignVal === 'right') {
+                attr.align = alignVal as AlignType;
+            } else if (alignVal === 'justify') {
+                attr.align = AlignType.left; // FGUI text doesn't support justify standardly, fallback to left
+            } else {
+                attr.align = AlignType.left;
+            }
+        }
+        
+        if (s.verticalAlign || s['vertical-align']) {
+            let vAlignVal = (s.verticalAlign || s['vertical-align']).toLowerCase();
+            if (vAlignVal === 'center') vAlignVal = 'middle'; // Map Figma 'center' to FGUI 'middle'
+            
+            if (vAlignVal === 'middle' || vAlignVal === 'bottom') {
+                attr.vAlign = vAlignVal as VertAlignType;
+            } else {
+                attr.vAlign = VertAlignType.top;
+            }
         }
         
         if (node.text) {
@@ -66,6 +84,12 @@ export class PropertyMapper {
         if (s.strokeSize) {
             attr.strokeSize = s.strokeSize.toString();
             attr.strokeColor = this.formatColor(s.strokeColor || "#000000");
+        }
+
+        // 💡 autoSize logic: if size is specified (usually from Figma), set to none
+        // Default FGUI behavior for text without autoSize is often 'both' or 'height'
+        if (node.width > 0 && node.height > 0) {
+            attr.autoSize = "none";
         }
     }
 

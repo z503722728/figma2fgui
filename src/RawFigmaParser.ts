@@ -37,10 +37,30 @@ export class RawFigmaParser {
     private processNode(node: any, parentAbsX: number, parentAbsY: number, isRoot: boolean = false): UINode {
         const box = node.absoluteBoundingBox || { x: 0, y: 0, width: 0, height: 0 };
         
-        // 坐标转换：FGUI 需要相对父级的坐标
-        // 💡 修正坐标计算：确保即使是 Root 也能保留相对位置（如果不是 0,0）
-        const localX = isRoot ? 0 : box.x - parentAbsX;
-        const localY = isRoot ? 0 : box.y - parentAbsY;
+        // 坐标转换：优先使用 relativeTransform (更精准的本地坐标)，降级使用 absoluteBoundingBox
+        let localX: number;
+        let localY: number;
+
+        if (node.relativeTransform && !isRoot) {
+            // relativeTransform is [[cos, -sin, tx], [sin, cos, ty]]
+            localX = node.relativeTransform[0][2];
+            localY = node.relativeTransform[1][2];
+        } else {
+            localX = isRoot ? 0 : box.x - parentAbsX;
+            localY = isRoot ? 0 : box.y - parentAbsY;
+        }
+
+        // 💡 Pragmatic Fix: Snap small offsets to 0 to fix "0,-2" type issues logic
+        // Often Figma text boxes bleed slightly due to line-height/metrics.
+        if (Math.abs(localX) < 3.5) localX = 0;
+        if (Math.abs(localY) < 3.5) localY = 0;
+
+        if (node.name.includes("Bridge") || node.characters === "Shapes") {
+            console.log(`[ParserDebug] Node: ${node.name} (${node.id})`);
+            console.log(`  Raw RelativeTransform Y: ${node.relativeTransform?.[1]?.[2]}`);
+            console.log(`  Calculated localY: ${localY}`);
+            console.log(`  Snapped? ${Math.abs(node.relativeTransform?.[1]?.[2]) < 3.5}`);
+        }
 
         const uiNode: UINode = {
             id: 'n' + (node.id ? node.id.replace(/[^a-zA-Z0-9]/g, '_') : Math.random().toString(36).substring(2, 5)), 
@@ -143,6 +163,14 @@ export class RawFigmaParser {
             // PropertyMapper expects styles.color, but we only mapped fillType/fillColor above
             if (node.fills && node.fills.length > 0 && node.fills[0].type === 'SOLID') {
                 styles.color = this.figmaColorToHex(node.fills[0].color, node.fills[0].opacity);
+            }
+
+            // 💡 Alignment Mappings
+            if (node.style.textAlignHorizontal) {
+                styles.textAlign = node.style.textAlignHorizontal;
+            }
+            if (node.style.textAlignVertical) {
+                styles.verticalAlign = node.style.textAlignVertical;
             }
         }
 

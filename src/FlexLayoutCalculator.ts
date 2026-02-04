@@ -88,8 +88,21 @@ export class FlexLayoutCalculator {
         node.height = Math.round(layout.height);
 
         // 调试日志
-        // console.log(`[Yoga] Node: ${node.name}, x: ${node.x}, y: ${node.y}, w: ${node.width}, h: ${node.height}`);
-
+        if (node.name.includes("Bridge") || node.text === "Shapes") {
+            console.log(`[YogaDebug] Node: ${node.name}`);
+            console.log(`  Before Yoga -> x: ${node.x}, y: ${node.y}`);
+            console.log(`  Yoga Output -> left: ${layout.left}, top: ${layout.top}`);
+        }
+        
+        // node.x = Math.round(layout.left);
+        // node.y = Math.round(layout.top);
+        
+        // 💡 Fix: Keep original position if Yoga returns NaN or if we want to trust parser for Absolute items
+        // But normally Yoga returns valid numbers.
+        // If the node was absolute, Yoga should return the 'left/top' we set.
+        
+        node.x = Math.round(layout.left);
+        node.y = Math.round(layout.top);
         if (node.children) {
             node.children.forEach((child, index) => {
                 this.applyYogaResults(child, yogaNode.getChild(index));
