@@ -16,12 +16,14 @@ Figma2FGUI 是一个高性能的自动化工具，旨在将 Figma 云端设计�
 ```env
 FIGMA_TOKEN=您的_Figma_Personal_Access_Token
 FIGMA_FILE_KEY=您的_设计稿_File_Key
-FIGMA_NODE_ID=可选_特定节点ID_如_3-1477
+FIGMA_NODE_ID=可选_特定节点ID_如_3:1477
+OUTPUT_PATH=可选_自定义输出根路径
 ```
 
 ### 2. 获取凭据说明
 - **FIGMA_FILE_KEY**: URL 中 `/design/` 后面的那一串。
 - **FIGMA_NODE_ID**: 选中某个 Frame 时，URL 参数中 `node-id=xxx` 的值（注意：冒号需保留，如 `3:1477`，在终端或 .env 中使用时确保格式正确）。
+- **OUTPUT_PATH**: 默认为项目下的 `output/FigmaProject`。
 
 ### 2. 安装依赖
 ```bash
