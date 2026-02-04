@@ -1,11 +1,11 @@
-import { UINode, UIStyle } from './models/UINode';
+import { UINode } from './models/UINode';
 import { ObjectType } from './models/FGUIEnum';
 
 /**
  * RawFigmaParser: 直接解析 Figma REST API 返回的原始数据树
  */
 export class RawFigmaParser {
-    constructor() {}
+    constructor() { }
 
     public parse(figmaData: any): UINode[] {
         console.log("🛠️ 正在使用 RawFigmaParser 解析数据...");
@@ -38,11 +38,13 @@ export class RawFigmaParser {
         const box = node.absoluteBoundingBox || { x: 0, y: 0, width: 0, height: 0 };
         
         // 坐标转换：FGUI 需要相对父级的坐标
+        // 💡 修正坐标计算：确保即使是 Root 也能保留相对位置（如果不是 0,0）
         const localX = isRoot ? 0 : box.x - parentAbsX;
         const localY = isRoot ? 0 : box.y - parentAbsY;
 
         const uiNode: UINode = {
-            id: node.id,
+            id: 'n' + (node.id ? node.id.replace(/[^a-zA-Z0-9]/g, '_') : Math.random().toString(36).substring(2, 5)), 
+            sourceId: node.id, 
             name: node.name.replace(/\s+/g, '_'),
             type: this.mapType(node),
             x: Math.round(localX),
@@ -50,6 +52,11 @@ export class RawFigmaParser {
             width: Math.round(box.width),
             height: Math.round(box.height),
             styles: this.mapStyles(node),
+            customProps: {
+                fillGeometry: node.fillGeometry,
+                strokeGeometry: node.strokeGeometry,
+                vectorPaths: node.vectorPaths
+            },
             children: [],
             text: node.characters
         };
@@ -74,7 +81,7 @@ export class RawFigmaParser {
             case 'RECTANGLE': return ObjectType.Graph;
             case 'ELLIPSE': return ObjectType.Graph;
             case 'FRAME': case 'INSTANCE': case 'COMPONENT': return ObjectType.Component;
-            case 'GROUP': return ObjectType.Container;
+            case 'GROUP': return ObjectType.Group;
             default: return ObjectType.Graph;
         }
     }
@@ -120,6 +127,10 @@ export class RawFigmaParser {
             if (node.counterAxisAlignItems) {
                 styles.alignItems = this.mapAlign(node.counterAxisAlignItems);
             }
+            if (node.paddingTop) styles.paddingTop = node.paddingTop;
+            if (node.paddingBottom) styles.paddingBottom = node.paddingBottom;
+            if (node.paddingLeft) styles.paddingLeft = node.paddingLeft;
+            if (node.paddingRight) styles.paddingRight = node.paddingRight;
         }
 
         // 5. 文本样式
@@ -127,6 +138,12 @@ export class RawFigmaParser {
             styles.fontSize = node.style.fontSize;
             styles.fontFamily = node.style.fontFamily;
             styles.fontWeight = node.style.fontWeight;
+            
+            // 💡 Fix: Map text color from fills explicitly for Text nodes
+            // PropertyMapper expects styles.color, but we only mapped fillType/fillColor above
+            if (node.fills && node.fills.length > 0 && node.fills[0].type === 'SOLID') {
+                styles.color = this.figmaColorToHex(node.fills[0].color, node.fills[0].opacity);
+            }
         }
 
         return styles;

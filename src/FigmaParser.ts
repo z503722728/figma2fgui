@@ -1,11 +1,11 @@
-import { UINode, UIStyle, ResourceInfo } from './models/UINode';
+import { UINode, ResourceInfo } from './models/UINode';
 import { ObjectType } from './models/FGUIEnum';
 
 /**
  * Figma2FGUI Parser - 处理节点提取与坐标转换
  */
 export class FigmaParser {
-    constructor(private config: any = {}) {}
+    constructor(private config: any = {}) { }
 
     public parse(figmaData: any[]): UINode[] {
         console.log("🚀 开始解析 Figma JSON (深度坐标转换模式)...");
@@ -48,7 +48,8 @@ export class FigmaParser {
         const nodeType = this.mapToObjectType(node.type);
 
         const element: UINode = {
-            id: node.id || 'n' + Math.random().toString(36).substring(2, 5), // 优先使用 Figma 原始 ID
+            id: 'n' + (node.id ? node.id.replace(/[^a-zA-Z0-9]/g, '_') : Math.random().toString(36).substring(2, 5)), 
+            sourceId: node.id, 
             type: nodeType,
             name: node.name.replace(/\s+/g, '_'),
             x: relativeX,
@@ -56,6 +57,7 @@ export class FigmaParser {
             width: w,
             height: h,
             styles: this.processStyles(node.cssProps),
+            customProps: {},
             children: []
         };
 
@@ -92,13 +94,13 @@ export class FigmaParser {
             case 'STAR': return ObjectType.Graph;
             case 'INSTANCE': return ObjectType.Component;
             case 'FRAME': return ObjectType.Component;
-            case 'GROUP': return ObjectType.Container;
+            case 'GROUP': return ObjectType.Group;
             default: return ObjectType.Graph;
         }
     }
 
-    private processStyles(css: any): UIStyle {
-        const styles: UIStyle = { ...css }; // 💡 关键：保留原始 cssProps 供 Flex 计算使用
+    private processStyles(css: any): Record<string, any> {
+        const styles: Record<string, any> = { ...css }; // 💡 关键：保留原始 cssProps 供 Flex 计算使用
 
         // 1. 填充 (Fills)
         if (css.background) {

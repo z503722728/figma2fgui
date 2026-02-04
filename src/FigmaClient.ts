@@ -21,6 +21,7 @@ export class FigmaClient {
     public async getFile() {
         console.log(`📡 正在从 Figma 抓取文件数据: ${this.fileKey}...`);
         const response = await axios.get(`${this.baseUrl}/files/${this.fileKey}`, {
+            params: { geometry: 'paths' },
             headers: { 'X-Figma-Token': this.token }
         });
         return response.data;
@@ -32,7 +33,7 @@ export class FigmaClient {
     public async getNodes(ids: string[]) {
         console.log(`📡 正在抓取特定节点数据: ${ids.join(', ')}...`);
         const response = await axios.get(`${this.baseUrl}/files/${this.fileKey}/nodes`, {
-            params: { ids: ids.join(',') },
+            params: { ids: ids.join(','), geometry: 'paths' },
             headers: { 'X-Figma-Token': this.token }
         });
         return response.data;

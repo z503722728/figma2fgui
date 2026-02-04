@@ -43,6 +43,10 @@ export class FlexLayoutCalculator {
                 const gapVal = parseFloat(s.gap);
                 yogaNode.setGap(Yoga.GUTTER_ALL, gapVal);
             }
+            if (s.paddingTop) yogaNode.setPadding(Yoga.EDGE_TOP, parseFloat(s.paddingTop));
+            if (s.paddingBottom) yogaNode.setPadding(Yoga.EDGE_BOTTOM, parseFloat(s.paddingBottom));
+            if (s.paddingLeft) yogaNode.setPadding(Yoga.EDGE_LEFT, parseFloat(s.paddingLeft));
+            if (s.paddingRight) yogaNode.setPadding(Yoga.EDGE_RIGHT, parseFloat(s.paddingRight));
         } else {
             // 如果不是 Flex 容器，为了保持原始设计，我们需要将其子节点设为绝对定位
             // 但 Yoga 默认是 Flex 布局，所以非 Flex 容器的子节点应该设为 PositionType.Absolute
@@ -55,10 +59,16 @@ export class FlexLayoutCalculator {
                 
                 // 💡 核心逻辑：如果父节点不是 Flex，或者子节点有明确的 left/top，则设为绝对定位
                 const hasPos = child.styles?.left !== undefined || child.styles?.top !== undefined;
+                
+                // Fix: 即使没有 left/top style，如果 RawFigmaParser 已经算好了 x/y，我们也应该使用它们
                 if (!isFlex || hasPos) {
                     yogaChild.setPositionType(Yoga.POSITION_TYPE_ABSOLUTE);
-                    if (child.styles?.left) yogaChild.setPosition(Yoga.EDGE_LEFT, parseFloat(child.styles.left));
-                    if (child.styles?.top) yogaChild.setPosition(Yoga.EDGE_TOP, parseFloat(child.styles.top));
+                    
+                    const leftVal = child.styles?.left !== undefined ? parseFloat(child.styles.left) : child.x;
+                    const topVal = child.styles?.top !== undefined ? parseFloat(child.styles.top) : child.y;
+                    
+                    if (!isNaN(leftVal)) yogaChild.setPosition(Yoga.EDGE_LEFT, leftVal);
+                    if (!isNaN(topVal)) yogaChild.setPosition(Yoga.EDGE_TOP, topVal);
                 }
                 
                 yogaNode.insertChild(yogaChild, index);

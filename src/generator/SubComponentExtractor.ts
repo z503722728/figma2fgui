@@ -59,6 +59,7 @@ export class SubComponentExtractor {
                     // Transform 'child' into a Reference Node
                     const refNode: UINode = {
                         id: child.id,
+                        sourceId: child.sourceId,
                         name: child.name,
                         type: child.type,
                         x: child.x,

@@ -5,6 +5,7 @@ import { ObjectType } from "./FGUIEnum";
  */
 export interface UINode {
     id: string;
+    sourceId?: string;
     name: string;
     type: ObjectType;
     
