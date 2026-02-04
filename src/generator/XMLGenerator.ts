@@ -156,7 +156,7 @@ export class XMLGenerator {
                 id: res.id, 
                 name: res.name, 
                 path: res.type === 'image' ? '/img/' : '/', 
-                exported: 'true' 
+                exported: 'false' 
             };
             
             if (res.type === 'component' && !res.name.endsWith('.xml')) {
