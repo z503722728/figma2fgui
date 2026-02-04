@@ -10,6 +10,7 @@ import { SubComponentExtractor } from './generator/SubComponentExtractor';
 import { FigmaClient } from './FigmaClient';
 import { UINode, ResourceInfo } from './models/UINode';
 import { ObjectType } from './models/FGUIEnum';
+import { getVisualPadding } from './Common';
 
 dotenv.config();
 
@@ -178,8 +179,15 @@ async function main() {
             const localPath = path.join(imgDir, fileName);
              
             // Construct SVG Content
-            const width = node.width;
-            const height = node.height;
+            // 💡 Property-based Padding Fix: Ensure strokes and shadows aren't clipped
+            const padding = getVisualPadding(node);
+            const width = node.width + padding * 2;
+            const height = node.height + padding * 2;
+            const vbX = -padding;
+            const vbY = -padding;
+            const vbW = node.width + padding * 2;
+            const vbH = node.height + padding * 2;
+            
             let svgBody = "";
 
             // 💡 提取 Defs 信息
@@ -326,7 +334,7 @@ async function main() {
             if (svgBody) {
                 const defsContent = defs.length > 0 ? `<defs>${defs.join('')}</defs>` : "";
                 const svgContent = `
-<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg width="${width}" height="${height}" viewBox="${vbX} ${vbY} ${vbW} ${vbH}" fill="none" xmlns="http://www.w3.org/2000/svg">
 ${defsContent}
 ${svgBody}
 </svg>`;

@@ -1,5 +1,6 @@
 import { ObjectType, LoaderFillType, AlignType, VertAlignType } from "../models/FGUIEnum";
 import { UINode } from "../models/UINode";
+import { getVisualPadding } from "../Common";
 
 /**
  * PropertyMapper: Translates CSS and React properties into FGUI-specific attributes.
@@ -12,12 +13,13 @@ export class PropertyMapper {
     public mapAttributes(node: UINode): Record<string, string> {
         // Log style keys for debugging if necessary
         const s = node.styles;
+        const padding = getVisualPadding(node);
         
         const attr: Record<string, string> = {
             id: node.id || 'n' + Math.random().toString(36).substring(2, 5),
             name: node.name,
-            xy: `${Math.round(node.x)},${Math.round(node.y)}`,
-            size: `${Math.round(parseFloat(s.width || node.width.toString()))},${Math.round(parseFloat(s.height || node.height.toString()))}`
+            xy: `${Math.round(node.x - padding)},${Math.round(node.y - padding)}`,
+            size: `${Math.round(parseFloat(s.width || node.width.toString()) + padding * 2)},${Math.round(parseFloat(s.height || node.height.toString()) + padding * 2)}`
         };
 
         // 1. Map Common Visual Properties
