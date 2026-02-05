@@ -13,9 +13,17 @@ export class XMLGenerator {
      * Generates component XML from a list of UI nodes.
      * Recursively processes children if present in the 'nodes' tree.
      */
-    public generateComponentXml(nodes: UINode[], buildId: string, width: number = 1440, height: number = 1024, rootStyles?: Record<string, any>, extention?: string): string {
+    public generateComponentXml(nodes: UINode[], buildId: string, width: number = 1440, height: number = 1024, rootStyles?: Record<string, any>, extention?: string, controllers?: any[]): string {
         const component = xmlbuilder.create('component').att('size', `${width},${height}`);
         if (extention) component.att('extention', extention);
+
+        // 💡 写入控制器 (Controllers)
+        if (controllers && controllers.length > 0) {
+            controllers.forEach(c => {
+                component.ele('controller', { name: c.name, pages: c.pages });
+            });
+        }
+
         const displayList = component.ele('displayList');
         const context = { idCounter: 0 };
 
@@ -65,6 +73,12 @@ export class XMLGenerator {
             // Clear other unrelated attributes
             delete attributes.type;
             delete attributes.fillColor;
+
+            // 💡 写入实例状态 (Controller & Page)
+            if (node.overrides && node.overrides.page !== undefined) {
+                attributes.controller = (node.type === ObjectType.Button) ? "button" : "state";
+                attributes.page = node.overrides.page;
+            }
 
             const compEle = parentEle.ele(eleName, attributes);
             
@@ -139,7 +153,15 @@ export class XMLGenerator {
                     if (hasVisuals) {
                         const assignedId = `n${context.idCounter++}`;
                         const attributes = this._mapper.mapAttributes(node, assignedId);
-                        parentEle.ele('graph', attributes);
+                        const graphEle = parentEle.ele('graph', attributes);
+
+                        // 💡 Recursive Flattened Visual Gear Handling
+                        if (node.gears && node.gears.length > 0) {
+                            node.gears.forEach(g => {
+                                const gearEle = graphEle.ele(g.type, { controller: g.controller });
+                                if (g.pages) gearEle.att('pages', g.pages);
+                            });
+                        }
                     }
 
                     if (hasChildren) {
@@ -159,6 +181,10 @@ export class XMLGenerator {
 
         const assignedId = `n${context.idCounter++}`;
         const attributes = this._mapper.mapAttributes(node, assignedId);
+        
+        if (node.visible === false) {
+            attributes.visible = "false";
+        }
 
         // Apply type-specific post-mapping
         if (node.type === ObjectType.Image && node.src) {
@@ -171,7 +197,17 @@ export class XMLGenerator {
             attributes.input = "true";
         }
 
-        parentEle.ele(eleName, attributes);
+        const nodeEle = parentEle.ele(eleName, attributes);
+
+        // 💡 写入齿轮 (Gears)
+        if (node.gears && node.gears.length > 0) {
+            node.gears.forEach(g => {
+                const gearEle = nodeEle.ele(g.type, { controller: g.controller });
+                if (g.pages) gearEle.att('pages', g.pages);
+                if (g.values) gearEle.att('values', g.values);
+                if (g.default) gearEle.att('default', g.default);
+            });
+        }
     }
 
     /**

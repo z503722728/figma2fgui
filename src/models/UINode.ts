@@ -1,5 +1,19 @@
 import { ObjectType } from "./FGUIEnum";
 
+export interface ControllerInfo {
+    name: string;
+    pages: string; // e.g. "0,up,1,down,2,over,3,selectedOver"
+    selected?: number;
+}
+
+export interface GearInfo {
+    type: string; // e.g. "gearDisplay", "gearXY", "gearColor"
+    controller: string;
+    pages?: string;
+    values?: string;
+    default?: string;
+}
+
 /**
  * Unified UI Node representing a semantic element in the UI tree.
  */
@@ -17,7 +31,7 @@ export interface UINode {
     
     // Styling & Properties
     customProps: Record<string, any>;
-    styles: Record<string, string>;
+    styles: Record<string, any>; // Changed from Record<string, string> to Record<string, any>
     
     // Content (text or image/svg data)
     text?: string;
@@ -28,6 +42,9 @@ export interface UINode {
     children: UINode[];
     parent?: UINode;
     
+    // Visibility
+    visible?: boolean;
+
     // Component Extraction Flag
     asComponent?: boolean;
     
@@ -38,6 +55,10 @@ export interface UINode {
     value?: number;
     max?: number;
     min?: number;
+
+    // 💡 控制器与控制器关联 (齿轮)
+    controllers?: ControllerInfo[];
+    gears?: GearInfo[];
 }
 
 /**

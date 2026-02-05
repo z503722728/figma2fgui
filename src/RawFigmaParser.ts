@@ -84,7 +84,8 @@ export class RawFigmaParser {
                 maskType: node.maskType
             },
             children: [],
-            text: node.characters
+            text: node.characters,
+            visible: node.visible !== false
         };
 
         if (uiNode.type === ObjectType.ProgressBar || uiNode.type === ObjectType.Slider) {

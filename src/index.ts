@@ -322,7 +322,7 @@ async function main() {
             let compNode = extractedNodesMap.get(res.id) || JSON.parse(res.data) as UINode;
             const hasVisuals = compNode.styles.fillType || compNode.styles.strokeSize;
             if (!compNode.children?.length && !hasVisuals) continue;
-            const xmlContent = generator.generateComponentXml(compNode.children || [], buildId, compNode.width, compNode.height, compNode.styles, compNode.extention);
+            const xmlContent = generator.generateComponentXml(compNode.children || [], buildId, compNode.width, compNode.height, compNode.styles, compNode.extention, compNode.controllers);
             await fs.writeFile(path.join(packagePath, res.name + '.xml'), xmlContent);
             validResources.push(res);
         }
@@ -330,7 +330,7 @@ async function main() {
 
     for (const node of rootNodes) {
         if (!node.children?.length && !node.styles.fillType) continue; 
-        const xmlContent = generator.generateComponentXml(node.children || [], buildId, node.width, node.height, node.styles);
+        const xmlContent = generator.generateComponentXml(node.children || [], buildId, node.width, node.height, node.styles, undefined, node.controllers);
         const fileName = `${node.name}.xml`;
         await fs.writeFile(path.join(packagePath, fileName), xmlContent);
         

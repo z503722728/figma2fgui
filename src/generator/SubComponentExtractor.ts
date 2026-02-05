@@ -16,6 +16,8 @@ export class SubComponentExtractor {
 
         for (const root of rootNodes) {
             this.processNodeRef(root);
+            // 💡 Also detect states for the root nodes themselves
+            this.detectAndApplyStates(root);
         }
 
         return this._newResources;
@@ -85,6 +87,13 @@ export class SubComponentExtractor {
                         overrides: this.extractOverrides(child)
                     };
 
+                    // 💡 Instance State Detection: Set which page this instance should show
+                    const activePage = this.extractInstanceActiveState(child);
+                    if (activePage > 0) {
+                        refNode.overrides = refNode.overrides || {};
+                        refNode.overrides['page'] = activePage;
+                    }
+
                     node.children[i] = refNode;
                 }
             }
@@ -148,6 +157,9 @@ export class SubComponentExtractor {
             cleanNode.extention = extensionMap[node.type];
             this.applyStandardNaming(cleanNode);
         }
+
+        // 💡 State Detection (Detect Selected, Normal, etc.)
+        this.detectAndApplyStates(cleanNode);
 
         const compData = JSON.stringify(cleanNode);
 
@@ -230,5 +242,133 @@ export class SubComponentExtractor {
         };
         
         if (node.children) node.children.forEach(scan);
+    }
+
+    /**
+     * Heuristic: Identify states based on layer names and apply FGUI Controllers/Gears.
+     */
+    private detectAndApplyStates(node: UINode) {
+        const stateKeywords = {
+            'selected': ['selected', '选中', 'checked'],
+            'over': ['over', 'hover', '悬停'],
+            'down': ['down', 'pressed', '按下', 'clicked'],
+            'disabled': ['disabled', '禁用', 'grayed'],
+            'normal': ['normal', 'up', '普通', '默认']
+        };
+
+        const foundStates: Set<string> = new Set();
+        const stateNodes: Map<string, UINode[]> = new Map();
+
+        const scan = (curr: UINode) => {
+            const nl = curr.name.toLowerCase();
+            let matched = false;
+            for (const [state, keywords] of Object.entries(stateKeywords)) {
+                if (keywords.some(k => nl.includes(k))) {
+                    foundStates.add(state);
+                    if (!stateNodes.has(state)) stateNodes.set(state, []);
+                    stateNodes.get(state)!.push(curr);
+                    matched = true;
+                    // Don't break, allow multiple (though rare)
+                }
+            }
+            if (curr.children) curr.children.forEach(scan);
+        };
+
+        if (node.children) node.children.forEach(scan);
+
+        if (foundStates.size > 0) {
+            console.log(`🎭 [State Detection] Detected nodes for states in ${node.name}: ${Array.from(foundStates).join(', ')}`);
+            
+            // 1. Create Controller
+            node.controllers = node.controllers || [];
+            const isButton = node.extention === 'Button' || node.type === ObjectType.Button;
+            const controllerName = isButton ? 'button' : 'state';
+            
+            if (isButton) {
+                node.controllers.push({
+                    name: 'button',
+                    pages: "0,up,1,down,2,over,3,selectedOver"
+                });
+            } else {
+                let pageStr = "0,Normal";
+                let i = 1;
+                const stateList = Array.from(foundStates).filter(s => s !== 'normal');
+                stateList.forEach(s => {
+                    pageStr += `,${i++},${s}`;
+                });
+                node.controllers.push({ name: 'state', pages: pageStr });
+            }
+
+            // 2. Apply Gears to state nodes
+            stateNodes.forEach((nodes, state) => {
+                let pageIds = "";
+                if (isButton) {
+                    if (state === 'down') pageIds = "1";
+                    else if (state === 'over') pageIds = "2";
+                    else if (state === 'selected') pageIds = "3";
+                    else if (state === 'disabled') pageIds = "4";
+                    else if (state === 'normal') pageIds = "0"; // Only show on 'up'
+                } else {
+                    const stateList = Array.from(foundStates).filter(s => s !== 'normal');
+                    const idx = stateList.indexOf(state);
+                    pageIds = (idx !== -1) ? (idx + 1).toString() : "0";
+                }
+
+                if (pageIds !== "") {
+                    nodes.forEach(n => {
+                        n.gears = n.gears || [];
+                        n.gears.push({
+                            type: 'gearDisplay',
+                            controller: controllerName,
+                            pages: pageIds
+                        });
+                    });
+                }
+            });
+
+            // 3. 💡 Pragmatic Default: If we found a 'Selected' or 'Over' node but NO 'Normal' node, 
+            // the existing nodes (like Background) might be intended for 'Normal' state.
+            // However, FGUI is additive by default, so we usually leave the shared background alone.
+        }
+    }
+
+    /**
+     * Determines which controller page an instance should show based on visible state layers.
+     */
+    private extractInstanceActiveState(instanceNode: UINode): number {
+        const stateKeywords = {
+            'selected': ['selected', '选中', 'checked'],
+            'over': ['over', 'hover', '悬停'],
+            'down': ['down', 'pressed', '按下', 'clicked'],
+            'disabled': ['disabled', '禁用', 'grayed']
+        };
+
+        // Standard Button Mapping (0:up, 1:down, 2:over, 3:selectedOver)
+        const buttonPageMap: Record<string, number> = {
+            'selected': 3,
+            'over': 2,
+            'down': 1,
+            'disabled': 4
+        };
+
+        const findVisibleState = (curr: UINode): string | null => {
+            if (curr.visible !== false) {
+                const nl = curr.name.toLowerCase();
+                for (const [state, keywords] of Object.entries(stateKeywords)) {
+                    if (keywords.some(k => nl.includes(k))) return state;
+                }
+            }
+            if (curr.children) {
+                for (const c of curr.children) {
+                    const s = findVisibleState(c);
+                    if (s) return s;
+                }
+            }
+            return null;
+        };
+
+        const state = findVisibleState(instanceNode);
+        if (state && buttonPageMap[state] !== undefined) return buttonPageMap[state];
+        return 0; 
     }
 }
