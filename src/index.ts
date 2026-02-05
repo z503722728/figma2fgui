@@ -322,7 +322,7 @@ async function main() {
             let compNode = extractedNodesMap.get(res.id) || JSON.parse(res.data) as UINode;
             const hasVisuals = compNode.styles.fillType || compNode.styles.strokeSize;
             if (!compNode.children?.length && !hasVisuals) continue;
-            const xmlContent = generator.generateComponentXml(compNode.children || [], buildId, compNode.width, compNode.height, compNode.styles);
+            const xmlContent = generator.generateComponentXml(compNode.children || [], buildId, compNode.width, compNode.height, compNode.styles, compNode.extention);
             await fs.writeFile(path.join(packagePath, res.name + '.xml'), xmlContent);
             validResources.push(res);
         }

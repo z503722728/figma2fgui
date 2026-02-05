@@ -13,8 +13,9 @@ export class XMLGenerator {
      * Generates component XML from a list of UI nodes.
      * Recursively processes children if present in the 'nodes' tree.
      */
-    public generateComponentXml(nodes: UINode[], buildId: string, width: number = 1440, height: number = 1024, rootStyles?: Record<string, any>): string {
+    public generateComponentXml(nodes: UINode[], buildId: string, width: number = 1440, height: number = 1024, rootStyles?: Record<string, any>, extention?: string): string {
         const component = xmlbuilder.create('component').att('size', `${width},${height}`);
+        if (extention) component.att('extention', extention);
         const displayList = component.ele('displayList');
         const context = { idCounter: 0 };
 
@@ -70,10 +71,12 @@ export class XMLGenerator {
             // 💡 写入属性覆盖 (Overrides)
             if (node.overrides) {
                 // 如果是按钮类组件，使用 <Button> 标签覆盖
-                if (node.name.toLowerCase().includes('button')) {
+                if (node.type === ObjectType.Button) {
                     const btnAttr: any = {};
                     if (node.overrides.title) btnAttr.title = node.overrides.title;
-                    if (node.overrides.icon) btnAttr.icon = node.overrides.icon;
+                    if (node.overrides.icon) {
+                        btnAttr.icon = `ui://${buildId}${node.overrides.icon}`;
+                    }
                     compEle.ele('Button', btnAttr);
                 } else {
                     // 通用自定义属性覆盖

@@ -124,11 +124,18 @@ export class RawFigmaParser {
 
     private mapType(node: any): ObjectType {
         const type = node.type;
+        const name = (node.name || "").toLowerCase();
+        
         // 💡 进阶逻辑：将所有具有矢量潜力的节点映射为 Image，以便生成 SVG 保证还原度
         if (type === 'VECTOR' || type === 'STAR' || type === 'REGULAR_POLYGON' || type === 'BOOLEAN_OPERATION' ||
             type === 'RECTANGLE' || type === 'ELLIPSE') {
             return ObjectType.Image;
         }
+
+        if (name.includes('button')) {
+            return ObjectType.Button;
+        }
+
         switch (type) {
             case 'TEXT': return ObjectType.Text;
             case 'FRAME': case 'INSTANCE': case 'COMPONENT': return ObjectType.Component;

@@ -122,6 +122,13 @@ export class SubComponentExtractor {
         const safeName = node.name.replace(/\s+/g, '');
         
         const cleanNode = this.stripParent(node);
+        
+        // 💡 FGUI Button Handling
+        if (node.type === ObjectType.Button) {
+            cleanNode.extention = 'Button';
+            this.applyButtonNaming(cleanNode);
+        }
+
         const compData = JSON.stringify(cleanNode);
 
         const newRes: ResourceInfo = {
@@ -167,5 +174,30 @@ export class SubComponentExtractor {
             newNode.children = node.children.map(c => this.stripParent(c));
         }
         return newNode;
+    }
+
+    private applyButtonNaming(node: UINode) {
+        const scan = (curr: UINode) => {
+            // Text -> title
+            if (curr.type === ObjectType.Text) {
+                const nameLow = curr.name.toLowerCase();
+                if (nameLow.includes('label') || nameLow.includes('title') || nameLow.includes('文本')) {
+                    curr.name = 'title';
+                }
+            }
+            // Image/Graph -> icon (convert to Loader)
+            if ((curr.type === ObjectType.Image || curr.type === ObjectType.Graph) && !curr.children?.length) {
+                const nameLow = curr.name.toLowerCase();
+                if (nameLow.includes('icon') || nameLow.includes('image') || nameLow.includes('图标')) {
+                    curr.name = 'icon';
+                    curr.type = ObjectType.Loader;
+                }
+            }
+
+            if (curr.children) curr.children.forEach(scan);
+        };
+        
+        // Don't rename the root button node itself, only its children
+        if (node.children) node.children.forEach(scan);
     }
 }

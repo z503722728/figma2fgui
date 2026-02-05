@@ -34,6 +34,7 @@ export interface UINode {
     // 💡 属性覆盖数据
     overrides?: Record<string, any>;
     rotation?: number;
+    extention?: string;
 }
 
 /**

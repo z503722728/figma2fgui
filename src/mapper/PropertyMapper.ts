@@ -17,7 +17,7 @@ export class PropertyMapper {
         
         const attr: Record<string, string> = {
             id: assignedId || node.id || 'n' + Math.random().toString(36).substring(2, 5),
-            name: assignedId || node.name || 'n0',
+            name: (assignedId && node.name !== 'title' && node.name !== 'icon') ? assignedId : (node.name || 'n0'),
             xy: `${Math.round(node.x - padding)},${Math.round(node.y - padding)}`,
             size: `${Math.round(parseFloat(s.width || node.width.toString()) + padding * 2)},${Math.round(parseFloat(s.height || node.height.toString()) + padding * 2)}`
         };
