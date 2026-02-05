@@ -16,18 +16,20 @@ export class XMLGenerator {
     public generateComponentXml(nodes: UINode[], buildId: string, width: number = 1440, height: number = 1024, rootStyles?: Record<string, any>): string {
         const component = xmlbuilder.create('component').att('size', `${width},${height}`);
         const displayList = component.ele('displayList');
+        const context = { idCounter: 0 };
 
         // Automatic Background Injection
         // If the component root has background-color or border, we need a graph to render it
         if (rootStyles) {
             const mapper = new PropertyMapper(); // Using local instance just for easy mapping, or we can manually map
             // Use a temporary node to map attributes
-            const tempNode: any = { id: 'n0', name: 'n0', styles: rootStyles, type: ObjectType.Graph, width, height, x: 0, y: 0 };
-            const attrs = mapper.mapAttributes(tempNode);
+            const testNode: any = { styles: rootStyles, type: ObjectType.Graph, width, height, x: 0, y: 0 };
+            const testAttrs = mapper.mapAttributes(testNode, "test");
             
             // Check if we have visual properties
-            if (attrs.fillColor || (attrs.lineColor && attrs.lineSize)) {
-                // Yes, generate a background shape
+            if (testAttrs.fillColor || (testAttrs.lineColor && testAttrs.lineSize)) {
+                const assignedId = `n${context.idCounter++}`;
+                const attrs = mapper.mapAttributes({ ...testNode, id: assignedId, name: assignedId }, assignedId);
                 // Ensure it fills the component
                 attrs.size = `${width},${height}`;
                 attrs.xy = "0,0";
@@ -38,7 +40,7 @@ export class XMLGenerator {
         }
 
         nodes.forEach(node => {
-            this.generateNodeXml(node, displayList, buildId);
+            this.generateNodeXml(node, displayList, buildId, context);
         });
 
         return component.end({ pretty: true });
@@ -47,12 +49,14 @@ export class XMLGenerator {
     /**
      * Generates XML for a single node and appends it to the parent XML element.
      */
-    private generateNodeXml(node: UINode, parentEle: any, buildId: string) {
-        const attributes = this._mapper.mapAttributes(node);
+    private generateNodeXml(node: UINode, parentEle: any, buildId: string, context: { idCounter: number }) {
         let eleName = 'graph';
 
         // Check if this node is a placeholder for an extracted component
         if (node.asComponent && node.src) {
+            const assignedId = `n${context.idCounter++}`;
+            const attributes = this._mapper.mapAttributes(node, assignedId);
+            
             eleName = 'component';
             attributes.src = node.src;
             if (node.fileName) attributes.fileName = node.fileName;
@@ -87,32 +91,19 @@ export class XMLGenerator {
                     break;
                 case ObjectType.Image:
                     eleName = 'image';
-                    if (node.src) {
-                        attributes.src = node.src;
-                        if (node.fileName) attributes.fileName = node.fileName;
-                        delete attributes.fill;
-                    }
                     break;
                 case ObjectType.Loader:
                     eleName = 'loader';
-                    if (node.src) {
-                        attributes.url = `ui://${buildId}${node.src}`;
-                    }
-                    break;
-                case ObjectType.Button:
-                    // Only used if Button logic is manual/inline, but usually handled via sub-components now
-                    eleName = 'component'; 
-                    if (node.src) attributes.src = node.src; 
                     break;
                 case ObjectType.InputText:
                     eleName = 'text'; 
-                    attributes.input = "true";
                     break;
                 case ObjectType.Component:
                 case ObjectType.Graph:
                 case ObjectType.Group:
                     // If it's a container that wasn't extracted, we flatten its children.
-                    const hasVisuals = attributes.fillColor || (attributes.lineColor && attributes.lineSize);
+                    const testAttr = this._mapper.mapAttributes(node, "test");
+                    const hasVisuals = testAttr.fillColor || (testAttr.lineColor && testAttr.lineSize);
                     const hasChildren = node.children && node.children.length > 0;
 
                     if (!hasVisuals && !hasChildren) {
@@ -120,6 +111,8 @@ export class XMLGenerator {
                     }
 
                     if (hasVisuals) {
+                        const assignedId = `n${context.idCounter++}`;
+                        const attributes = this._mapper.mapAttributes(node, assignedId);
                         parentEle.ele('graph', attributes);
                     }
 
@@ -130,12 +123,26 @@ export class XMLGenerator {
                             const flattenedChild = { ...child };
                             flattenedChild.x = node.x + child.x;
                             flattenedChild.y = node.y + child.y; 
-                            this.generateNodeXml(flattenedChild, parentEle, buildId);
+                            this.generateNodeXml(flattenedChild, parentEle, buildId, context);
                         });
                         return; // Children processed
                     }
-                    return; // Already added as graph if it had visuals, or pruned if it didn't
+                    return; 
             }
+        }
+
+        const assignedId = `n${context.idCounter++}`;
+        const attributes = this._mapper.mapAttributes(node, assignedId);
+
+        // Apply type-specific post-mapping
+        if (node.type === ObjectType.Image && node.src) {
+            attributes.src = node.src;
+            if (node.fileName) attributes.fileName = node.fileName;
+            delete attributes.fill;
+        } else if (node.type === ObjectType.Loader && node.src) {
+            attributes.url = `ui://${buildId}${node.src}`;
+        } else if (node.type === ObjectType.InputText) {
+            attributes.input = "true";
         }
 
         parentEle.ele(eleName, attributes);

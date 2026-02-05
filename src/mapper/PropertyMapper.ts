@@ -10,14 +10,14 @@ export class PropertyMapper {
     /**
      * Maps a UINode's raw styles and props into FGUI XML attributes.
      */
-    public mapAttributes(node: UINode): Record<string, string> {
+    public mapAttributes(node: UINode, assignedId?: string): Record<string, string> {
         // Log style keys for debugging if necessary
         const s = node.styles;
         const padding = getVisualPadding(node);
         
         const attr: Record<string, string> = {
-            id: node.id || 'n' + Math.random().toString(36).substring(2, 5),
-            name: node.name,
+            id: assignedId || node.id || 'n' + Math.random().toString(36).substring(2, 5),
+            name: assignedId || node.name || 'n0',
             xy: `${Math.round(node.x - padding)},${Math.round(node.y - padding)}`,
             size: `${Math.round(parseFloat(s.width || node.width.toString()) + padding * 2)},${Math.round(parseFloat(s.height || node.height.toString()) + padding * 2)}`
         };
