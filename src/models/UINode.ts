@@ -42,7 +42,10 @@ export interface UINode {
 export interface ResourceInfo {
     id: string;
     name: string;
-    type: 'image' | 'component' | 'sound' | 'font' | 'movieclip';
+    type: 'image' | 'component' | 'sound' | 'font' | 'movieclip' | 'misc';
     data?: string;
     isBase64?: boolean;
+    width?: number;
+    height?: number;
+    exported?: boolean;
 }

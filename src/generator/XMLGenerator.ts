@@ -155,20 +155,22 @@ export class XMLGenerator {
         const pkgDesc = xmlbuilder.create('packageDescription').att('id', buildId);
         const resNode = pkgDesc.ele('resources');
 
-        // Main component is always present
-        resNode.ele('component', { id: 'main_id', name: 'main.xml', path: '/', exported: 'true' });
-
         resources.forEach(res => {
+            if (res.type === 'misc') return;
+            
             const resAttr: any = { 
                 id: res.id, 
                 name: res.name, 
                 path: res.type === 'image' ? '/img/' : '/', 
-                exported: 'false' 
+                exported: res.exported ? 'true' : 'false' 
             };
             
             if (res.type === 'component' && !res.name.endsWith('.xml')) {
                 resAttr.name = res.name + '.xml';
             }
+
+            if (res.width !== undefined) resAttr.width = res.width.toString();
+            if (res.height !== undefined) resAttr.height = res.height.toString();
 
             resNode.ele(res.type, resAttr);
         });

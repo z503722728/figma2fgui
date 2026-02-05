@@ -251,7 +251,13 @@ async function main() {
             if (svgBody) {
                 const svgContent = `<svg width="${width}" height="${height}" viewBox="${vbX} ${vbY} ${vbW} ${vbH}" fill="none" xmlns="http://www.w3.org/2000/svg"><defs>${defs.join('')}</defs>${svgBody}</svg>`;
                 await fs.writeFile(localPath, svgContent.trim());
-                const res: ResourceInfo = { id: 'img_' + nodeIdStr, name: fileName, type: 'image' };
+                const res: ResourceInfo = { 
+                    id: 'img_' + nodeIdStr, 
+                    name: fileName, 
+                    type: 'image',
+                    width: Math.round(width),
+                    height: Math.round(height)
+                };
                 allResources.push(res);
                 node.src = res.id;
                 node.fileName = 'img/' + fileName;
@@ -266,7 +272,13 @@ async function main() {
             const fileName = `${node.name}_${nodeIdStr}.png`;
             const localPath = path.join(imgDir, fileName);
             if (await fs.pathExists(localPath)) {
-                const res: ResourceInfo = { id: 'img_' + nodeIdStr, name: fileName, type: 'image' };
+                const res: ResourceInfo = { 
+                    id: 'img_' + nodeIdStr, 
+                    name: fileName, 
+                    type: 'image',
+                    width: Math.round(node.width),
+                    height: Math.round(node.height)
+                };
                 allResources.push(res);
                 node.src = res.id;
                 node.fileName = 'img/' + fileName;
@@ -284,7 +296,13 @@ async function main() {
                 if (url) {
                     const fileName = `${node.name}_${srcId.replace(/:/g, '_')}.png`;
                     await client.downloadImage(url, path.join(imgDir, fileName));
-                    const res: ResourceInfo = { id: 'img_' + srcId.replace(/:/g, '_'), name: fileName, type: 'image' };
+                    const res: ResourceInfo = { 
+                        id: 'img_' + srcId.replace(/:/g, '_'), 
+                        name: fileName, 
+                        type: 'image',
+                        width: Math.round(node.width),
+                        height: Math.round(node.height)
+                    };
                     allResources.push(res);
                     node.src = res.id;
                     node.fileName = 'img/' + fileName;
@@ -313,7 +331,15 @@ async function main() {
     for (const node of rootNodes) {
         if (!node.children?.length && !node.styles.fillType) continue; 
         const xmlContent = generator.generateComponentXml(node.children || [], buildId, node.width, node.height, node.styles);
-        await fs.writeFile(path.join(packagePath, `${node.name}.xml`), xmlContent);
+        const fileName = `${node.name}.xml`;
+        await fs.writeFile(path.join(packagePath, fileName), xmlContent);
+        
+        validResources.push({
+            id: `main_${node.id.replace(/:/g, '_')}`,
+            name: fileName,
+            type: 'component',
+            exported: true
+        });
     }
 
     const finalResources = [...validResources, ...allResources.filter(r => r.type === 'image')];
