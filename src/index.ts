@@ -1,4 +1,5 @@
 import * as fs from 'fs-extra';
+import * as crypto from 'crypto';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
 import { VectorMerger } from './optimizer/VectorMerger';
@@ -141,126 +142,176 @@ async function main() {
     });
 
     await fs.ensureDir(imgDir);
+
+    const renderSvg = async (node: UINode, suffix: string = ""): Promise<ResourceInfo | null> => {
+        const nodeIdStr = (node.sourceId || node.id).replace(/:/g, '_');
+        const fileName = `${node.name}${suffix}_${nodeIdStr}.svg`;
+        const localPath = path.join(imgDir, fileName);
+        const padding = getVisualPadding(node);
+        const width = node.width + padding * 2;
+        const height = node.height + padding * 2;
+        const vbX = -padding;
+        const vbY = -padding;
+        const vbW = node.width + padding * 2;
+        const vbH = node.height + padding * 2;
+        
+        let svgBody = "";
+        const defs: string[] = [];
+        
+        const addGradient = (g: any, id: string) => {
+            if (g.type === 'GRADIENT_LINEAR') {
+                const stops = g.stops.map((s: any) => `<stop offset="${s.offset * 100}%" stop-color="${s.color}" stop-opacity="${s.opacity}" />`).join('');
+                const h1 = g.handles[0];
+                const h2 = g.handles[1];
+                defs.push(`<linearGradient id="${id}" x1="${h1.x * 100}%" y1="${h1.y * 100}%" x2="${h2.x * 100}%" y2="${h2.y * 100}%">${stops}</linearGradient>`);
+            } else if (g.type === 'GRADIENT_RADIAL') {
+                const stops = g.stops.map((s: any) => `<stop offset="${s.offset * 100}%" stop-color="${s.color}" stop-opacity="${s.opacity}" />`).join('');
+                const h1 = g.handles[0];
+                const h2 = g.handles[1];
+                defs.push(`<radialGradient id="${id}" cx="${h1.x * 100}%" cy="${h1.y * 100}%" r="50%" fx="${h1.x * 100}%" fy="${h1.y * 100}%">${stops}</radialGradient>`);
+            }
+        };
+
+        const addFilter = (filters: any[], id: string) => {
+            let filterBody = "";
+            filters.forEach((f, i) => {
+                if (f.type === 'DROP_SHADOW') {
+                    filterBody += `<feGaussianBlur in="SourceAlpha" stdDeviation="${f.radius / 2}" result="blur${i}"/>
+                    <feOffset in="blur${i}" dx="${f.offset.x}" dy="${f.offset.y}" result="offsetBlur${i}"/>
+                    <feFlood flood-color="${f.color}" flood-opacity="${f.opacity}" result="color${i}"/>
+                    <feComposite in="color${i}" in2="offsetBlur${i}" operator="in" result="shadow${i}"/>
+                    <feMerge result="merge${i}"><feMergeNode in="shadow${i}"/><feMergeNode in="SourceGraphic"/></feMerge>`;
+                } else if (f.type === 'LAYER_BLUR') {
+                    filterBody += `<feGaussianBlur in="SourceGraphic" stdDeviation="${f.radius / 2}" />`;
+                }
+            });
+            defs.push(`<filter id="${id}" x="-20%" y="-20%" width="140%" height="140%">${filterBody}</filter>`);
+        };
+
+        if (node.customProps.mergedPaths) {
+            const paths = node.customProps.mergedPaths;
+            let currentMaskId = ""; 
+            const renderedPaths: string[] = [];
+            paths.forEach((p: any, idx: number) => {
+                const pathId = `p${idx}`;
+                let fillAttr = `fill="${p.fillColor}"`;
+                let filterAttr = "";
+                if (p.isMask) {
+                    const maskId = `${pathId}_mask`;
+                    const maskPathData = p.type === 'rect' 
+                        ? `<rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" rx="${p.cornerRadius}" fill="white" />`
+                        : `<path d="${p.path}" transform="translate(${p.x},${p.y})" fill="white" />`;
+                    defs.push(`<mask id="${maskId}" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse"><rect width="100%" height="100%" fill="black" />${maskPathData}</mask>`);
+                    if (currentMaskId) renderedPaths.push(`</g>`);
+                    currentMaskId = maskId;
+                    renderedPaths.push(`<g mask="url(#${maskId})">`);
+                }
+                if (p.gradient) {
+                    const gradId = `${pathId}_grad`;
+                    addGradient(p.gradient, gradId);
+                    fillAttr = `fill="url(#${gradId})"`;
+                }
+                if (p.filters) {
+                    const filtId = `${pathId}_filt`;
+                    addFilter(p.filters, filtId);
+                    filterAttr = `filter="url(#${filtId})"`;
+                }
+                const fo = p.fillOpacity !== undefined ? ` fill-opacity="${p.fillOpacity}"` : "";
+                if (p.type === 'rect') {
+                    const sc = p.strokeColor || 'none';
+                    const sw = p.strokeSize || 0;
+                    renderedPaths.push(`<rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" ${fillAttr}${fo} rx="${p.cornerRadius}" stroke="${sc}" stroke-width="${sw}" ${filterAttr}${p.rotation ? ` transform="rotate(${p.rotation}, ${p.x + p.width / 2}, ${p.y + p.height / 2})"` : ""} />`);
+                } else {
+                    renderedPaths.push(`<path d="${p.path}" transform="translate(${p.x},${p.y})" ${fillAttr}${fo} stroke="${p.strokeColor || 'none'}" stroke-width="${p.strokeSize || 0}" ${filterAttr} />`);
+                }
+            });
+            if (currentMaskId) renderedPaths.push(`</g>`);
+            svgBody = renderedPaths.join('\n');
+        } 
+        else if (node.customProps.fillGeometry) {
+            const paths = node.customProps.fillGeometry;
+            let fillAttr = `fill="${node.styles.fillColor || "none"}"`;
+            let filterAttr = "";
+            if (node.styles.gradient) {
+                const gradId = `sn_grad`;
+                addGradient(node.styles.gradient, gradId);
+                fillAttr = `fill="url(#${gradId})"`;
+            }
+            if (node.styles.filters) {
+                const filtId = `sn_filt`;
+                addFilter(node.styles.filters as any, filtId);
+                filterAttr = `filter="url(#${filtId})"`;
+            }
+            const fillOpacity = node.styles.fillOpacity !== undefined ? ` fill-opacity="${node.styles.fillOpacity}"` : "";
+            const strokeColor = node.styles.strokeColor || "none";
+            const strokeSize = node.styles.strokeSize || 0;
+            let pathData = Array.isArray(paths) ? paths.map((p: any) => p.path).join(' ') : "";
+            if (pathData) svgBody = `<path d="${pathData}" ${fillAttr}${fillOpacity} stroke="${strokeColor}" stroke-width="${strokeSize}" ${filterAttr} />`;
+        }
+
+        if (svgBody) {
+            const svgContent = `<svg width="${width}" height="${height}" viewBox="${vbX} ${vbY} ${vbW} ${vbH}" fill="none" xmlns="http://www.w3.org/2000/svg"><defs>${defs.join('')}</defs>${svgBody}</svg>`;
+            await fs.writeFile(localPath, svgContent.trim());
+            return { 
+                id: 'img_' + nodeIdStr + suffix.replace(/[^a-zA-Z0-9]/g, '_'), 
+                name: fileName, 
+                type: 'image',
+                width: Math.round(width),
+                height: Math.round(height)
+            };
+        }
+        return null;
+    };
     
     if (vectorNodes.length > 0) {
         console.log(`🎨 Generating ${vectorNodes.length} SVGs locally...`);
         for (const node of vectorNodes) {
-            const nodeIdStr = (node.sourceId || node.id).replace(/:/g, '_');
-            const fileName = `${node.name}_${nodeIdStr}.svg`;
-            const localPath = path.join(imgDir, fileName);
-            const padding = getVisualPadding(node);
-            const width = node.width + padding * 2;
-            const height = node.height + padding * 2;
-            const vbX = -padding;
-            const vbY = -padding;
-            const vbW = node.width + padding * 2;
-            const vbH = node.height + padding * 2;
-            
-            let svgBody = "";
-            const defs: string[] = [];
-            
-            const addGradient = (g: any, id: string) => {
-                if (g.type === 'GRADIENT_LINEAR') {
-                    const stops = g.stops.map((s: any) => `<stop offset="${s.offset * 100}%" stop-color="${s.color}" stop-opacity="${s.opacity}" />`).join('');
-                    const h1 = g.handles[0];
-                    const h2 = g.handles[1];
-                    defs.push(`<linearGradient id="${id}" x1="${h1.x * 100}%" y1="${h1.y * 100}%" x2="${h2.x * 100}%" y2="${h2.y * 100}%">${stops}</linearGradient>`);
-                } else if (g.type === 'GRADIENT_RADIAL') {
-                    const stops = g.stops.map((s: any) => `<stop offset="${s.offset * 100}%" stop-color="${s.color}" stop-opacity="${s.opacity}" />`).join('');
-                    const h1 = g.handles[0];
-                    const h2 = g.handles[1];
-                    defs.push(`<radialGradient id="${id}" cx="${h1.x * 100}%" cy="${h1.y * 100}%" r="50%" fx="${h1.x * 100}%" fy="${h1.y * 100}%">${stops}</radialGradient>`);
-                }
-            };
+            // 1. Render Normal Look (Page 0)
+            const baseRes = await renderSvg(node);
+            if (baseRes) {
+                allResources.push(baseRes);
+                node.src = baseRes.id;
+                node.fileName = 'img/' + baseRes.name;
 
-            const addFilter = (filters: any[], id: string) => {
-                let filterBody = "";
-                filters.forEach((f, i) => {
-                    if (f.type === 'DROP_SHADOW') {
-                        filterBody += `<feGaussianBlur in="SourceAlpha" stdDeviation="${f.radius / 2}" result="blur${i}"/>
-                        <feOffset in="blur${i}" dx="${f.offset.x}" dy="${f.offset.y}" result="offsetBlur${i}"/>
-                        <feFlood flood-color="${f.color}" flood-opacity="${f.opacity}" result="color${i}"/>
-                        <feComposite in="color${i}" in2="offsetBlur${i}" operator="in" result="shadow${i}"/>
-                        <feMerge result="merge${i}"><feMergeNode in="shadow${i}"/><feMergeNode in="SourceGraphic"/></feMerge>`;
-                    } else if (f.type === 'LAYER_BLUR') {
-                        filterBody += `<feGaussianBlur in="SourceGraphic" stdDeviation="${f.radius / 2}" />`;
-                    }
-                });
-                defs.push(`<filter id="${id}" x="-20%" y="-20%" width="140%" height="140%">${filterBody}</filter>`);
-            };
+                // 2. Render Multi-State Looks
+                if (node.multiLooks) {
+                    const pageIds = Object.keys(node.multiLooks).map(Number);
+                    const lookResMap: Record<number, string> = { 0: baseRes.id };
+                    
+                    for (const pageId of pageIds) {
+                        const lookStyles = node.multiLooks[pageId];
+                        // Clone node and apply modified styles
+                        const lookNode = JSON.parse(JSON.stringify(node));
+                        Object.assign(lookNode.styles, lookStyles);
+                        
+                        // Handle mergedPaths style propagation if applicable
+                        if (lookNode.customProps.mergedPaths) {
+                            lookNode.customProps.mergedPaths = lookNode.customProps.mergedPaths.map((p: any) => ({
+                                ...p,
+                                ...lookStyles // Crude but effective for simple states
+                            }));
+                        }
 
-            if (node.customProps.mergedPaths) {
-                const paths = node.customProps.mergedPaths;
-                let currentMaskId = ""; 
-                const renderedPaths: string[] = [];
-                paths.forEach((p: any, idx: number) => {
-                    const pathId = `p${idx}`;
-                    let fillAttr = `fill="${p.fillColor}"`;
-                    let filterAttr = "";
-                    if (p.isMask) {
-                        const maskId = `${pathId}_mask`;
-                        const maskPathData = p.type === 'rect' 
-                            ? `<rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" rx="${p.cornerRadius}" fill="white" />`
-                            : `<path d="${p.path}" transform="translate(${p.x},${p.y})" fill="white" />`;
-                        defs.push(`<mask id="${maskId}" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse"><rect width="100%" height="100%" fill="black" />${maskPathData}</mask>`);
-                        if (currentMaskId) renderedPaths.push(`</g>`);
-                        currentMaskId = maskId;
-                        renderedPaths.push(`<g mask="url(#${maskId})">`);
+                        const lookRes = await renderSvg(lookNode, `_page${pageId}`);
+                        if (lookRes) {
+                            allResources.push(lookRes);
+                            lookResMap[pageId] = lookRes.id;
+                        }
                     }
-                    if (p.gradient) {
-                        const gradId = `${pathId}_grad`;
-                        addGradient(p.gradient, gradId);
-                        fillAttr = `fill="url(#${gradId})"`;
-                    }
-                    if (p.filters) {
-                        const filtId = `${pathId}_filt`;
-                        addFilter(p.filters, filtId);
-                        filterAttr = `filter="url(#${filtId})"`;
-                    }
-                    const fo = p.fillOpacity !== undefined ? ` fill-opacity="${p.fillOpacity}"` : "";
-                    if (p.type === 'rect') {
-                        renderedPaths.push(`<rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" ${fillAttr}${fo} rx="${p.cornerRadius}" ${filterAttr}${p.rotation ? ` transform="rotate(${p.rotation}, ${p.x + p.width / 2}, ${p.y + p.height / 2})"` : ""} />`);
-                    } else {
-                        renderedPaths.push(`<path d="${p.path}" transform="translate(${p.x},${p.y})" ${fillAttr}${fo} stroke="${p.strokeColor || 'none'}" stroke-width="${p.strokeSize || 0}" ${filterAttr} />`);
-                    }
-                });
-                if (currentMaskId) renderedPaths.push(`</g>`);
-                svgBody = renderedPaths.join('\n');
-            } 
-            else if (node.customProps.fillGeometry) {
-                const paths = node.customProps.fillGeometry;
-                let fillAttr = `fill="${node.styles.fillColor || "none"}"`;
-                let filterAttr = "";
-                if (node.styles.gradient) {
-                    const gradId = `sn_grad`;
-                    addGradient(node.styles.gradient, gradId);
-                    fillAttr = `fill="url(#${gradId})"`;
-                }
-                if (node.styles.filters) {
-                    const filtId = `sn_filt`;
-                    addFilter(node.styles.filters as any, filtId);
-                    filterAttr = `filter="url(#${filtId})"`;
-                }
-                const fillOpacity = node.styles.fillOpacity !== undefined ? ` fill-opacity="${node.styles.fillOpacity}"` : "";
-                const strokeColor = node.styles.strokeColor || "none";
-                const strokeSize = node.styles.strokeSize || 0;
-                let pathData = Array.isArray(paths) ? paths.map((p: any) => p.path).join(' ') : "";
-                if (pathData) svgBody = `<path d="${pathData}" ${fillAttr}${fillOpacity} stroke="${strokeColor}" stroke-width="${strokeSize}" ${filterAttr} />`;
-            }
 
-            if (svgBody) {
-                const svgContent = `<svg width="${width}" height="${height}" viewBox="${vbX} ${vbY} ${vbW} ${vbH}" fill="none" xmlns="http://www.w3.org/2000/svg"><defs>${defs.join('')}</defs>${svgBody}</svg>`;
-                await fs.writeFile(localPath, svgContent.trim());
-                const res: ResourceInfo = { 
-                    id: 'img_' + nodeIdStr, 
-                    name: fileName, 
-                    type: 'image',
-                    width: Math.round(width),
-                    height: Math.round(height)
-                };
-                allResources.push(res);
-                node.src = res.id;
-                node.fileName = 'img/' + fileName;
+                    // 3. Update gearIcon values (ui://pkg/res0|ui://pkg/res1...)
+                    const gear = node.gears?.find(g => g.type === 'gearIcon');
+                    if (gear) {
+                        // For Button, standard pages are 0,1,2,3
+                        const maxPage = Math.max(...pageIds, 3);
+                        const values: string[] = [];
+                        for (let p = 0; p <= maxPage; p++) {
+                            // Link to the resource ID (XMLGenerator will prefix it if needed)
+                            values.push(lookResMap[p] || baseRes.id);
+                        }
+                        gear.values = values.join('|');
+                    }
+                }
             }
         }
     }
@@ -312,7 +363,12 @@ async function main() {
     }
 
     // --- 5. 生成 XML 阶段 ---
-    const buildId = 'f2f' + Math.random().toString(36).substring(2, 7);
+    // 💡 使用 Deterministic ID: 基于 Figma Node ID 生成 MD5
+    // 这样即使重新生成，Package ID 也保持不变，不需要依赖旧文件
+    const idSeed = FIGMA_NODE_ID || 'CloudPackage';
+    let buildId = 'f2f' + crypto.createHash('md5').update(idSeed).digest('hex').substring(0, 5);
+    console.log(`🆔 Package ID: ${buildId} (Derived from Node ID: ${idSeed})`);
+
     await fs.ensureDir(packagePath);
     const generator = new XMLGenerator();
     const validResources: ResourceInfo[] = [];

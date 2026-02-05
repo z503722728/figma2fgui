@@ -45,6 +45,10 @@ export interface UINode {
     // Visibility
     visible?: boolean;
 
+    // 💡 多状态视觉差异 (Multi-Look Sync)
+    // pageId -> modified styles/data
+    multiLooks?: Record<number, any>;
+
     // Component Extraction Flag
     asComponent?: boolean;
     

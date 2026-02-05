@@ -25,7 +25,7 @@ export class XMLGenerator {
         }
 
         const displayList = component.ele('displayList');
-        const context = { idCounter: 0 };
+        const context = { idCounter: 0, buildId };
 
         // Automatic Background Injection
         // If the component root has background-color or border, we need a graph to render it
@@ -51,6 +51,11 @@ export class XMLGenerator {
         nodes.forEach(node => {
             this.generateNodeXml(node, displayList, buildId, context);
         });
+
+        // 💡 Button 扩展组件需要 <Button/> 标签
+        if (extention === 'Button') {
+            component.ele('Button');
+        }
 
         return component.end({ pretty: true });
     }
@@ -122,7 +127,8 @@ export class XMLGenerator {
                     eleName = 'text';
                     break;
                 case ObjectType.Image:
-                    eleName = 'image';
+                    // 💡 如果节点有 multiLooks，使用 loader 以支持 gearIcon 切换
+                    eleName = (node.multiLooks && Object.keys(node.multiLooks).length > 0) ? 'loader' : 'image';
                     break;
                 case ObjectType.Loader:
                     eleName = 'loader';
@@ -188,8 +194,14 @@ export class XMLGenerator {
 
         // Apply type-specific post-mapping
         if (node.type === ObjectType.Image && node.src) {
-            attributes.src = node.src;
-            if (node.fileName) attributes.fileName = node.fileName;
+            // 💡 如果是被转换为 loader 的 Image (因为 multiLooks)，使用 url 而不是 src
+            // FGUI 格式: ui://packageIdresId (无斜杠分隔)
+            if (node.multiLooks && Object.keys(node.multiLooks).length > 0) {
+                attributes.url = `ui://${buildId}${node.src}`;
+            } else {
+                attributes.src = node.src;
+                if (node.fileName) attributes.fileName = node.fileName;
+            }
             delete attributes.fill;
         } else if (node.type === ObjectType.Loader && node.src) {
             attributes.url = `ui://${buildId}${node.src}`;
@@ -204,7 +216,25 @@ export class XMLGenerator {
             node.gears.forEach(g => {
                 const gearEle = nodeEle.ele(g.type, { controller: g.controller });
                 if (g.pages) gearEle.att('pages', g.pages);
-                if (g.values) gearEle.att('values', g.values);
+                
+                if (g.values) {
+                    let finalValues = g.values;
+                    // 💡 gearIcon 需要完整的 ui://packageId 前缀才能找到资源
+                    // FGUI 格式为 ui://packageIdresId (无斜杠分隔)
+                    if (g.type === 'gearIcon') {
+                        const valuesArr = g.values.split('|');
+                        finalValues = valuesArr.map(v => {
+                            if (v.includes('ui://')) return v;
+                            return `ui://${buildId}${v}`;
+                        }).join('|');
+                        
+                        // 💡 FGUI 需要 pages 属性才能正确显示 gearIcon
+                        const pageIndices = valuesArr.map((_, i) => i).join(',');
+                        gearEle.att('pages', pageIndices);
+                    }
+                    gearEle.att('values', finalValues);
+                }
+                
                 if (g.default) gearEle.att('default', g.default);
             });
         }

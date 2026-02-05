@@ -8,66 +8,125 @@ export class SubComponentExtractor {
     private _newResources: ResourceInfo[] = [];
     private _nextCompId = 0;
     private _componentCache = new Map<string, ResourceInfo>();
+    private _candidateGroups = new Map<string, UINode[]>();
 
     public extract(rootNodes: UINode[]): ResourceInfo[] {
         this._newResources = [];
         this._nextCompId = 0;
         this._componentCache.clear();
+        this._candidateGroups.clear();
 
+        // Phase 1: Bottom-Up candidate collection
         for (const root of rootNodes) {
-            this.processNodeRef(root);
-            // 💡 Also detect states for the root nodes themselves
+            this.collectCandidatesRecursive(root);
+        }
+
+        // Phase 2: Analyze and Pre-register Resources
+        for (const [hash, instances] of this._candidateGroups.entries()) {
+            if (instances.length === 0) continue;
+            const canonical = instances[0];
+
+            // 💡 Registering the resource structure early so Phase 3 can find it
+            const resId = `comp_` + (this._nextCompId++);
+            const safeName = canonical.name.replace(/\s+/g, '');
+            const preRes: ResourceInfo = {
+                id: resId,
+                name: safeName,
+                type: 'component',
+                data: "" // To be populated in Phase 4
+            };
+            this._componentCache.set(hash, preRes);
+            
+            this.analyzeMultiLooks(canonical, instances);
+        }
+
+        // Phase 3: Transformation (Process all nodes to use component references)
+        // Transform candidates nodes first
+        for (const group of this._candidateGroups.values()) {
+            for (const inst of group) {
+                this.transformTreeRecursive(inst);
+                this.detectAndApplyStates(inst);
+            }
+        }
+        // Transform root nodes
+        for (const root of rootNodes) {
+            this.transformTreeRecursive(root);
             this.detectAndApplyStates(root);
+        }
+
+        // Phase 4: Finalize Resource Data (Serialization)
+        for (const [hash, instances] of this._candidateGroups.entries()) {
+            const canonical = instances[0];
+            const cachedRes = this._componentCache.get(hash)!;
+            
+            const cleanNode = this.stripParent(canonical);
+            
+            // Apply FGUI Extension mapping
+            const extensionMap: Record<number, string> = {
+                [ObjectType.Button]: 'Button',
+                [ObjectType.ProgressBar]: 'ProgressBar',
+                [ObjectType.Slider]: 'Slider',
+                [ObjectType.ComboBox]: 'ComboBox',
+                [ObjectType.Label]: 'Label',
+                [ObjectType.List]: 'List'
+            };
+            if (extensionMap[canonical.type]) {
+                cleanNode.extention = extensionMap[canonical.type];
+                this.applyStandardNaming(cleanNode);
+            }
+
+            cachedRes.data = JSON.stringify(cleanNode);
+            this._newResources.push(cachedRes);
         }
 
         return this._newResources;
     }
 
-    private processNodeRef(node: UINode): void {
+    private collectCandidatesRecursive(node: UINode): void {
         if (!node.children || node.children.length === 0) return;
 
-        // 1. Process children first (Bottom-Up extraction)
+        for (const child of node.children) {
+            this.collectCandidatesRecursive(child);
+        }
+
+        const isExtensionType = (
+            node.type === ObjectType.Button || 
+            node.type === ObjectType.Label || 
+            node.type === ObjectType.ProgressBar || 
+            node.type === ObjectType.Slider || 
+            node.type === ObjectType.ComboBox || 
+            node.type === ObjectType.List
+        );
+
+        const hasNestedExtracted = node.children.some(c => c.asComponent);
+        const hasVisuals = (node.styles.background || node.styles.backgroundColor || node.styles.border || node.styles.outline);
+        
+        const isSignificant = node.children.length > 2 || 
+            isExtensionType || 
+            hasNestedExtracted ||
+            (hasVisuals && node.children.length > 0);
+
+        if (isSignificant) {
+            const hash = this.calculateStructuralHash(node);
+            if (!this._candidateGroups.has(hash)) {
+                this._candidateGroups.set(hash, []);
+            }
+            this._candidateGroups.get(hash)!.push(node);
+            node.asComponent = true; 
+        }
+    }
+
+    private transformTreeRecursive(node: UINode): void {
+        if (!node.children) return;
+
         for (let i = 0; i < node.children.length; i++) {
             const child = node.children[i];
             
-            if (child.children && child.children.length > 0) {
-                this.processNodeRef(child);
-            }
+            if (child.asComponent) {
+                const hash = this.calculateStructuralHash(child);
+                const compRes = this._componentCache.get(hash);
 
-            // 2. Evaluate if 'child' should be extracted as a separate component
-            const isExtensionType = (
-                child.type === ObjectType.Button || 
-                child.type === ObjectType.Label || 
-                child.type === ObjectType.ProgressBar || 
-                child.type === ObjectType.Slider || 
-                child.type === ObjectType.ComboBox || 
-                child.type === ObjectType.List
-            );
-
-            if (child.type === ObjectType.Component || isExtensionType) {
-                // Heuristic: A node is "Significant" enough to be its own component if:
-                // 1. It is an extension type (Button, ProgressBar, etc.)
-                // 2. It has more than 2 children (e.g., a card or complex group)
-                // 3. It contains children that were themselves already extracted (nested hierarchy)
-                // 4. It has a background/border AND children (Significant visual group)
-                
-                const hasNestedExtracted = child.children.some(c => c.asComponent);
-                const hasVisuals = (child.styles.background || child.styles.backgroundColor || child.styles.border || child.styles.outline);
-                
-                const isSignificant = child.children.length > 2 || 
-                    isExtensionType || 
-                    hasNestedExtracted ||
-                    (hasVisuals && child.children.length > 0);
-
-                if (isSignificant) {
-                    // Extract!
-                    const compRes = this.createSubComponentResource(child);
-                    // Only add if not already in the list
-                    if (!this._newResources.find(r => r.id === compRes.id)) {
-                        this._newResources.push(compRes);
-                    }
-
-                    // Transform 'child' into a Reference Node
+                if (compRes) {
                     const refNode: UINode = {
                         id: child.id,
                         sourceId: child.sourceId,
@@ -83,11 +142,10 @@ export class SubComponentExtractor {
                         src: compRes.id,
                         fileName: compRes.name + '.xml',
                         asComponent: true,
-                        // 💡 记录覆盖属性 (目前支持文字和图片)
+                        visible: child.visible,
                         overrides: this.extractOverrides(child)
                     };
 
-                    // 💡 Instance State Detection: Set which page this instance should show
                     const activePage = this.extractInstanceActiveState(child);
                     if (activePage > 0) {
                         refNode.overrides = refNode.overrides || {};
@@ -96,8 +154,65 @@ export class SubComponentExtractor {
 
                     node.children[i] = refNode;
                 }
+            } else {
+                this.transformTreeRecursive(child);
             }
         }
+    }
+
+    private analyzeMultiLooks(canonical: UINode, instances: UINode[]) {
+        if (instances.length <= 1) return;
+
+        const walkAndCompare = (can: UINode, path: number[]) => {
+            const variantNodes = instances.map(inst => {
+                let curr = inst;
+                for (const idx of path) {
+                    if (curr.children && curr.children[idx]) curr = curr.children[idx];
+                    else return null;
+                }
+                return curr;
+            }).filter(v => v !== null) as UINode[];
+
+            variantNodes.forEach(variant => {
+                const pageId = this.extractInstanceActiveState(instances[variantNodes.indexOf(variant)] || variant);
+                if (pageId === 0) return;
+
+                const diff = this.computeStyleDiff(can, variant);
+                if (Object.keys(diff).length > 0) {
+                    can.multiLooks = can.multiLooks || {};
+                    can.multiLooks[pageId] = can.multiLooks[pageId] || {};
+                    Object.assign(can.multiLooks[pageId], diff);
+                    
+                    can.gears = can.gears || [];
+                    if (!can.gears.find(g => g.type === 'gearIcon')) {
+                        can.gears.push({
+                            type: 'gearIcon',
+                            controller: (canonical.extention === 'Button' || canonical.type === ObjectType.Button) ? 'button' : 'state'
+                        });
+                    }
+                }
+            });
+
+            if (can.children) {
+                can.children.forEach((c, i) => walkAndCompare(c, [...path, i]));
+            }
+        };
+
+        walkAndCompare(canonical, []);
+    }
+
+    private computeStyleDiff(node1: UINode, node2: UINode): any {
+        const diff: any = {};
+        const keys = ['fillColor', 'fillOpacity', 'strokeColor', 'strokeSize', 'gradient', 'imageFill', 'fillType'];
+        keys.forEach(k => {
+            const v1 = JSON.stringify(node1.styles[k]);
+            const v2 = JSON.stringify(node2.styles[k]);
+            if (v1 !== v2) diff[k] = node2.styles[k];
+        });
+        if (JSON.stringify(node1.styles.filters) !== JSON.stringify(node2.styles.filters)) {
+            diff.filters = node2.styles.filters;
+        }
+        return diff;
     }
 
     private extractOverrides(node: UINode): Record<string, any> {
@@ -128,51 +243,7 @@ export class SubComponentExtractor {
         return overrides;
     }
 
-    private createSubComponentResource(node: UINode): ResourceInfo {
-        const hash = this.calculateStructuralHash(node);
-        
-        if (this._componentCache.has(hash)) {
-            const cached = this._componentCache.get(hash)!;
-            console.log(`♻️ [去重] 检测到重复结构，复用组件: ${cached.name} (原始: ${node.name})`);
-            return cached;
-        }
 
-        // 使用组件名作为前缀，并分配唯一的资源 ID
-        const resId = `comp_` + (this._nextCompId++);
-        const safeName = node.name.replace(/\s+/g, '');
-        
-        const cleanNode = this.stripParent(node);
-        
-        // 💡 FGUI Component Extension Handling
-        const extensionMap: Record<number, string> = {
-            [ObjectType.Button]: 'Button',
-            [ObjectType.ProgressBar]: 'ProgressBar',
-            [ObjectType.Slider]: 'Slider',
-            [ObjectType.ComboBox]: 'ComboBox',
-            [ObjectType.Label]: 'Label',
-            [ObjectType.List]: 'List'
-        };
-
-        if (extensionMap[node.type]) {
-            cleanNode.extention = extensionMap[node.type];
-            this.applyStandardNaming(cleanNode);
-        }
-
-        // 💡 State Detection (Detect Selected, Normal, etc.)
-        this.detectAndApplyStates(cleanNode);
-
-        const compData = JSON.stringify(cleanNode);
-
-        const newRes: ResourceInfo = {
-            id: resId,
-            name: safeName,
-            type: 'component',
-            data: compData
-        };
-
-        this._componentCache.set(hash, newRes);
-        return newRes;
-    }
 
     private calculateStructuralHash(node: UINode): string {
         // 深度去重核心逻辑：只关注“结构”和“样式类”，忽略“具体内容”
@@ -182,8 +253,8 @@ export class SubComponentExtractor {
         // 1. 物理属性 (尺寸是结构的一部分)
         parts.push(node.type, node.width, node.height);
         
-        // 2. 视觉样式 (忽略具体的填充色，如果需要更激进的去重)
-        // 但通常边框、圆角、阴影是组件特性的核心，我们保留它们
+        // 2. 视觉样式 - 忽略颜色以便将不同颜色的实例分组到同一组件中进行 Multi-Look 比较
+        // 边框宽度、圆角、阴影是组件结构的核心，颜色差异将作为 Multi-Look 变体处理
         const importantStyles = ['borderRadius', 'border', 'strokeSize', 'shadow', 'fillType'];
         importantStyles.forEach(k => {
             if (node.styles[k]) parts.push(k, JSON.stringify(node.styles[k]));
@@ -314,8 +385,18 @@ export class SubComponentExtractor {
                     pageIds = (idx !== -1) ? (idx + 1).toString() : "0";
                 }
 
+                // 💡 禁用自动 gearDisplay：
+                // 由于 multiLooks 通过 gearIcon 处理状态切换，不需要基于名称的 gearDisplay。
+                // 如 "Selected" 层通常是始终可见的装饰层，不应隐藏。
+                // 如果需要特定层仅在某些状态显示，应在 Figma 中通过实际的可见性差异来触发，
+                // 而不是仅基于命名。
+                /*
                 if (pageIds !== "") {
                     nodes.forEach(n => {
+                        // 💡 如果节点已有 multiLooks，它通过 gearIcon 切换，不需要 gearDisplay
+                        if (n.multiLooks && Object.keys(n.multiLooks).length > 0) {
+                            return; // Skip - uses gearIcon instead
+                        }
                         n.gears = n.gears || [];
                         n.gears.push({
                             type: 'gearDisplay',
@@ -324,6 +405,7 @@ export class SubComponentExtractor {
                         });
                     });
                 }
+                */
             });
 
             // 3. 💡 Pragmatic Default: If we found a 'Selected' or 'Over' node but NO 'Normal' node, 
