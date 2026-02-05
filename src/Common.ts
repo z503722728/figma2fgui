@@ -61,3 +61,12 @@ export function getVisualPadding(node: any): number {
 
     return padding;
 }
+
+/**
+ * Sanitizes a string to be safe for use as a filename.
+ * Replaces invalid characters (/ \ : * ? " < > |) with underscores.
+ */
+export function sanitizeFileName(name: string): string {
+    const sanitized = name.replace(/[\\/:*?"<>|]/g, '_');
+    return sanitized.length > 20 ? sanitized.substring(0, 20) : sanitized;
+}

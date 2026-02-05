@@ -24,6 +24,7 @@ export class RawFigmaParser {
         // 情况 2: 特定节点数据 (GET /v1/files/:key/nodes)
         else if (figmaData.nodes) {
             Object.values(figmaData.nodes).forEach((nodeData: any) => {
+                if (!nodeData) return;
                 const node = nodeData.document;
                 if (node) {
                     const rootNode = this.processNode(node, 0, 0, true);

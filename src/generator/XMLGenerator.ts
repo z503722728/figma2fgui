@@ -64,6 +64,7 @@ export class XMLGenerator {
      * Generates XML for a single node and appends it to the parent XML element.
      */
     private generateNodeXml(node: UINode, parentEle: any, buildId: string, context: { idCounter: number }) {
+        if (node.visible === false) return;
         let eleName = 'graph';
 
         // Check if this node is a placeholder for an extracted component
@@ -188,9 +189,6 @@ export class XMLGenerator {
         const assignedId = `n${context.idCounter++}`;
         const attributes = this._mapper.mapAttributes(node, assignedId);
         
-        if (node.visible === false) {
-            attributes.visible = "false";
-        }
 
         // Apply type-specific post-mapping
         if (node.type === ObjectType.Image && node.src) {

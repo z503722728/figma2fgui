@@ -83,6 +83,14 @@ export class SubComponentExtractor {
     }
 
     private collectCandidatesRecursive(node: UINode): void {
+        // Skip invisible nodes unless they are likely state variants
+        if (node.visible === false) {
+            const nameLow = node.name.toLowerCase();
+            const stateKeywords = ['hover', 'pressed', 'down', 'selected', 'checked', 'disabled', '悬停', '按下', '选中'];
+            const isState = stateKeywords.some(k => nameLow.includes(k));
+            if (!isState) return;
+        }
+
         if (!node.children || node.children.length === 0) return;
 
         for (const child of node.children) {
@@ -105,6 +113,11 @@ export class SubComponentExtractor {
             isExtensionType || 
             hasNestedExtracted ||
             (hasVisuals && node.children.length > 0);
+
+        // 💡 Exclusions: explicit ignore list
+        if (node.name.toLowerCase().includes('btntext')) {
+            return;
+        }
 
         if (isSignificant) {
             const hash = this.calculateStructuralHash(node);
@@ -212,6 +225,41 @@ export class SubComponentExtractor {
         if (JSON.stringify(node1.styles.filters) !== JSON.stringify(node2.styles.filters)) {
             diff.filters = node2.styles.filters;
         }
+
+        // Verbose Debug
+        if (node1.name.includes("BtnBg")) {
+            // console.log(`🔍 Diffing ${node1.name}: paths1=${node1.customProps?.mergedPaths?.length}, paths2=${node2.customProps?.mergedPaths?.length}`);
+        }
+
+        // 💡 Specialized check for Merged Paths (Vector Groups)
+        if (node1.customProps?.mergedPaths && node2.customProps?.mergedPaths) {
+            const p1 = node1.customProps.mergedPaths[0];
+            const p2 = node2.customProps.mergedPaths[0];
+            
+            // Check Fill Color
+            if (p1 && p2 && p1.fillColor !== p2.fillColor) {
+                console.log(`🎨 [StyleDiff] Color changed in merged paths for ${node1.name}: ${p1.fillColor} -> ${p2.fillColor}`);
+                diff['fillColor'] = p2.fillColor; 
+            }
+            // Check Stroke Color - ALSO crucial for the Outline/Blue button case
+            if (p1 && p2 && p1.strokeColor !== p2.strokeColor) {
+                console.log(`🎨 [StyleDiff] Stroke changed in merged paths for ${node1.name}: ${p1.strokeColor} -> ${p2.strokeColor}`);
+                diff['strokeColor'] = p2.strokeColor;
+            }
+        }
+
+        // 💡 Specialized check for Merged Paths (Vector Groups)
+        // If the nodes have mergedPaths, we need to check if the internal colors changed.
+        // We'll peek at the first path's color as a heuristic.
+        if (node1.customProps?.mergedPaths && node2.customProps?.mergedPaths) {
+            const p1 = node1.customProps.mergedPaths[0];
+            const p2 = node2.customProps.mergedPaths[0];
+            if (p1 && p2 && p1.fillColor !== p2.fillColor) {
+                console.log(`🎨 [StyleDiff] Color changed in merged paths for ${node1.name}: ${p1.fillColor} -> ${p2.fillColor}`);
+                diff['fillColor'] = p2.fillColor; 
+            }
+        }
+
         return diff;
     }
 
@@ -231,7 +279,7 @@ export class SubComponentExtractor {
             // 如果节点名包含 'Icon' 或 'Image'，记录其图片覆盖
             if ((curr.type === ObjectType.Image || curr.type === ObjectType.Loader) && curr.src) {
                 const nl = curr.name.toLowerCase();
-                if (nl.includes('icon') || nl.includes('image') || nl.includes('图标')) {
+                if (nl.includes('icon') || nl.includes('image') || nl.includes('图标') || nl.includes('bg') || nl.includes('background')) {
                     overrides['icon'] = curr.src;
                 }
             }
@@ -279,7 +327,7 @@ export class SubComponentExtractor {
         return newNode;
     }
 
-    private applyStandardNaming(node: UINode) {
+    public applyStandardNaming(node: UINode) {
         const scan = (curr: UINode) => {
             const nameLow = curr.name.toLowerCase();
 
@@ -292,8 +340,8 @@ export class SubComponentExtractor {
 
             // 2. Image/Graph/Component -> icon (convert to Loader)
             const isVisual = (curr.type === ObjectType.Image || curr.type === ObjectType.Graph || curr.type === ObjectType.Component);
-            if (isVisual && !curr.children?.length) {
-                if (nameLow.includes('icon') || nameLow.includes('image') || nameLow.includes('图标')) {
+            if (isVisual) {
+                if (nameLow.includes('icon') || nameLow.includes('image') || nameLow.includes('图标') || nameLow.includes('bg') || nameLow.includes('background')) {
                     curr.name = 'icon';
                     curr.type = ObjectType.Loader;
                 }

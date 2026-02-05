@@ -11,7 +11,7 @@ import { SubComponentExtractor } from './generator/SubComponentExtractor';
 import { FigmaClient } from './FigmaClient';
 import { UINode, ResourceInfo } from './models/UINode';
 import { ObjectType } from './models/FGUIEnum';
-import { getVisualPadding } from './Common';
+import { getVisualPadding, sanitizeFileName } from './Common';
 
 dotenv.config();
 
@@ -111,17 +111,69 @@ async function main() {
     const vectorNodes: UINode[] = [];
     const bitmapNodes: UINode[] = [];
 
+    // 💡 Pre-scan img directory for existing PNGs (Flexible Matching)
+    let existingPngs: string[] = [];
+    if (fs.existsSync(imgDir)) {
+        existingPngs = fs.readdirSync(imgDir).filter(f => f.toLowerCase().endsWith('.png'));
+        console.log(`🖼️ Found ${existingPngs.length} existing PNGs in cache.`);
+    }
+
     const findResourceNodes = (nodes: UINode[]) => {
         const scanner = (node: UINode) => {
-            if (node.type === ObjectType.Image && (node.customProps?.fillGeometry || node.customProps?.mergedPaths)) {
-                vectorNodes.push(node);
+            // Skip invisible nodes for resource generation
+            if (node.visible === false) return;
+
+            // 💡 Flexible Check for existing PNG
+            // Strategy: Look for any file in 'existingPngs' that contains the node ID (raw or sanitized)
+            const rawId = node.sourceId || node.id; // e.g. "I1279:7407;1182:7793"
+            const sanitizedId = rawId.replace(/:/g, '_'); // e.g. "I1279_7407;1182_7793" (semicolon preserved)
+            const strictSanitizedId = rawId.replace(/[:;]/g, '_'); // e.g. "I1279_7407_1182_7793"
+
+            let foundPng: string | undefined;
+
+            // 1. Try exact match first (fastest)
+            const exactName = `${sanitizeFileName(node.name)}_${sanitizedId}.png`;
+            if (existingPngs.includes(exactName)) foundPng = exactName;
+
+            // 2. Fuzzy match: Check if any file contains the ID
+            if (!foundPng) {
+                // We'll search for the ID part. 
+                // The filename structure is typically "Name_ID.png" or "icon_ID.png"
+                // We check against rawId (unlikely due to OS chars), sanitizedId, and strictSanitizedId.
+                foundPng = existingPngs.find(f => {
+                    return f.includes(sanitizedId) || f.includes(strictSanitizedId);
+                });
             }
-            else if (node.styles.fillType === 'image' || node.type === ObjectType.Image) {
-                if (!vectorNodes.includes(node)) {
+
+            let handled = false;
+            
+            if (foundPng) {
+                console.log(`🖼️ Matched existing PNG for ${node.name}: ${foundPng}`);
+                
+                // We need to ensure we use this EXACT filename for the resource
+                // But 'findResourceNodes' just pushes to lists. 
+                // Actual resource creation happens in 'downloadBitmaps' or valid resource construction.
+                // We'll attach the found filename to the node so we can use it later.
+                node.customProps = node.customProps || {};
+                node.customProps.manualPngName = foundPng;
+
+                if (!bitmapNodes.includes(node)) {
                     bitmapNodes.push(node);
                 }
+                handled = true; 
             }
-            if (node.children) node.children.forEach(scanner);
+
+            if (!handled) {
+                if (node.type === ObjectType.Image && (node.customProps?.fillGeometry || node.customProps?.mergedPaths)) {
+                    vectorNodes.push(node);
+                }
+                else if (node.styles.fillType === 'image' || node.type === ObjectType.Image || node.type === ObjectType.Loader) {
+                    if (!vectorNodes.includes(node)) {
+                        bitmapNodes.push(node);
+                    }
+                }
+            }
+            if (node.children && !handled) node.children.forEach(scanner);
         };
         nodes.forEach(scanner);
     };
@@ -145,7 +197,7 @@ async function main() {
 
     const renderSvg = async (node: UINode, suffix: string = ""): Promise<ResourceInfo | null> => {
         const nodeIdStr = (node.sourceId || node.id).replace(/:/g, '_');
-        const fileName = `${node.name}${suffix}_${nodeIdStr}.svg`;
+        const fileName = `${sanitizeFileName(node.name)}${suffix}_${nodeIdStr}.svg`;
         const localPath = path.join(imgDir, fileName);
         const padding = getVisualPadding(node);
         const width = node.width + padding * 2;
@@ -320,9 +372,14 @@ async function main() {
         const nodesToDownload: UINode[] = [];
         for (const node of bitmapNodes) {
             const nodeIdStr = (node.sourceId || node.id).replace(/:/g, '_');
-            const fileName = `${node.name}_${nodeIdStr}.png`;
+            
+            // 💡 Use manually found PNG if available (from flexible lookup)
+            const manualName = node.customProps?.manualPngName;
+            const fileName = manualName || `${sanitizeFileName(node.name)}_${nodeIdStr}.png`;
             const localPath = path.join(imgDir, fileName);
-            if (await fs.pathExists(localPath)) {
+
+            // If manualName is set, we know it exists (checked in scanner)
+            if (manualName || await fs.pathExists(localPath)) {
                 const res: ResourceInfo = { 
                     id: 'img_' + nodeIdStr, 
                     name: fileName, 
@@ -339,25 +396,34 @@ async function main() {
         }
         if (nodesToDownload.length > 0) {
             console.log(`📡 Downloading ${nodesToDownload.length} Bitmaps...`);
-            const ids = nodesToDownload.map(n => n.sourceId || n.id);
-            const urls = await client.getImageUrls(ids, 'png');
-            for (const node of nodesToDownload) {
-                const srcId = node.sourceId || node.id;
-                const url = urls[srcId];
-                if (url) {
-                    const fileName = `${node.name}_${srcId.replace(/:/g, '_')}.png`;
-                    await client.downloadImage(url, path.join(imgDir, fileName));
-                    const res: ResourceInfo = { 
-                        id: 'img_' + srcId.replace(/:/g, '_'), 
-                        name: fileName, 
-                        type: 'image',
-                        width: Math.round(node.width),
-                        height: Math.round(node.height)
-                    };
-                    allResources.push(res);
-                    node.src = res.id;
-                    node.fileName = 'img/' + fileName;
+            try {
+                const ids = nodesToDownload.map(n => n.sourceId || n.id);
+                const urls = await client.getImageUrls(ids, 'png');
+                for (const node of nodesToDownload) {
+                    const srcId = node.sourceId || node.id;
+                    const url = urls[srcId];
+                    if (url) {
+                        const fileName = `${sanitizeFileName(node.name)}_${srcId.replace(/:/g, '_')}.png`;
+                        try {
+                            await client.downloadImage(url, path.join(imgDir, fileName));
+                        } catch (err) {
+                            console.warn(`⚠️ Failed to download image ${fileName}:`, err);
+                            continue; // Keep going
+                        }
+                        const res: ResourceInfo = { 
+                            id: 'img_' + srcId.replace(/:/g, '_'), 
+                            name: fileName, 
+                            type: 'image',
+                            width: Math.round(node.width),
+                            height: Math.round(node.height)
+                        };
+                        allResources.push(res);
+                        node.src = res.id;
+                        node.fileName = 'img/' + fileName;
+                    }
                 }
+            } catch (error) {
+                console.error("❌ Error during bitmap batch processing:", error);
             }
         }
     }
@@ -373,29 +439,58 @@ async function main() {
     const generator = new XMLGenerator();
     const validResources: ResourceInfo[] = [];
 
+    const processedNames = new Set<string>();
+
     for (const res of componentResources) {
         if (res.type === 'component' && res.data) {
             let compNode = extractedNodesMap.get(res.id) || JSON.parse(res.data) as UINode;
             const hasVisuals = compNode.styles.fillType || compNode.styles.strokeSize;
             if (!compNode.children?.length && !hasVisuals) continue;
+            const safeName = sanitizeFileName(res.name);
+            
+            if (processedNames.has(safeName)) {
+                console.log(`Duplicate component skipped: ${safeName}`);
+                continue;
+            }
+            
             const xmlContent = generator.generateComponentXml(compNode.children || [], buildId, compNode.width, compNode.height, compNode.styles, compNode.extention, compNode.controllers);
-            await fs.writeFile(path.join(packagePath, res.name + '.xml'), xmlContent);
+            await fs.writeFile(path.join(packagePath, safeName + '.xml'), xmlContent);
+            
+            // Update name for package.xml consistency
+            res.name = safeName;
             validResources.push(res);
+            processedNames.add(safeName);
         }
     }
 
+    console.log("Root Nodes:", rootNodes.map(n => n.name));
     for (const node of rootNodes) {
         if (!node.children?.length && !node.styles.fillType) continue; 
+        
+        // 💡 Ensure root nodes also get standard naming (icon/title conversions)
+        // This is critical if the root node overwrites an extracted component file
+        extractor.applyStandardNaming(node);
+
+        const safeName = sanitizeFileName(node.name);
+        // Root nodes usually overwrite components if they share names, but for package.xml we just need one entry
+        // If it's already processed as a component, we still generate the file (it might be the 'main' export)
+        // but we should avoid duplicate package.xml entries if possible.
+        // However, root nodes are often "main" and might need distinct ID handling if they are indeed the same name.
+        // For FGUI, one file = one resource. 
+        
         const xmlContent = generator.generateComponentXml(node.children || [], buildId, node.width, node.height, node.styles, undefined, node.controllers);
-        const fileName = `${node.name}.xml`;
+        const fileName = `${safeName}.xml`;
         await fs.writeFile(path.join(packagePath, fileName), xmlContent);
         
-        validResources.push({
-            id: `main_${node.id.replace(/:/g, '_')}`,
-            name: fileName,
-            type: 'component',
-            exported: true
-        });
+        if (!processedNames.has(safeName)) {
+            validResources.push({
+                id: `main_${node.id.replace(/:/g, '_')}`,
+                name: fileName,
+                type: 'component',
+                exported: true
+            });
+            processedNames.add(safeName);
+        }
     }
 
     const finalResources = [...validResources, ...allResources.filter(r => r.type === 'image')];
