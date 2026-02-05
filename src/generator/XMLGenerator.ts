@@ -78,11 +78,26 @@ export class XMLGenerator {
                         btnAttr.icon = `ui://${buildId}${node.overrides.icon}`;
                     }
                     compEle.ele('Button', btnAttr);
+                } else if (node.type === ObjectType.ProgressBar) {
+                    const barAttr: any = {};
+                    if (node.overrides.value !== undefined) barAttr.value = node.overrides.value;
+                    if (node.overrides.max !== undefined) barAttr.max = node.overrides.max;
+                    compEle.ele('ProgressBar', barAttr);
+                } else if (node.type === ObjectType.Slider) {
+                    const sliderAttr: any = {};
+                    if (node.overrides.value !== undefined) sliderAttr.value = node.overrides.value;
+                    if (node.overrides.max !== undefined) sliderAttr.max = node.overrides.max;
+                    compEle.ele('Slider', sliderAttr);
+                } else if (node.type === ObjectType.ComboBox) {
+                    const comboAttr: any = {};
+                    if (node.overrides.title) comboAttr.title = node.overrides.title;
+                    compEle.ele('ComboBox', comboAttr);
                 } else {
                     // 通用自定义属性覆盖
-                    Object.keys(node.overrides).forEach(key => {
-                        compEle.ele('customData', { [key]: node.overrides![key] });
-                    });
+                    const customEle = compEle.ele('Custom');
+                    for (const [key, value] of Object.entries(node.overrides)) {
+                        customEle.att(key, value);
+                    }
                 }
             }
             return;
@@ -98,12 +113,20 @@ export class XMLGenerator {
                 case ObjectType.Loader:
                     eleName = 'loader';
                     break;
+                case ObjectType.List:
+                    eleName = 'list';
+                    break;
                 case ObjectType.InputText:
                     eleName = 'text'; 
                     break;
                 case ObjectType.Component:
                 case ObjectType.Graph:
                 case ObjectType.Group:
+                case ObjectType.Button:
+                case ObjectType.ProgressBar:
+                case ObjectType.Slider:
+                case ObjectType.ComboBox:
+                case ObjectType.Label:
                     // If it's a container that wasn't extracted, we flatten its children.
                     const testAttr = this._mapper.mapAttributes(node, "test");
                     const hasVisuals = testAttr.fillColor || (testAttr.lineColor && testAttr.lineSize);

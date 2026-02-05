@@ -33,9 +33,18 @@ export class SubComponentExtractor {
             }
 
             // 2. Evaluate if 'child' should be extracted as a separate component
-            if (child.type === ObjectType.Component || child.type === ObjectType.Button) {
+            const isExtensionType = (
+                child.type === ObjectType.Button || 
+                child.type === ObjectType.Label || 
+                child.type === ObjectType.ProgressBar || 
+                child.type === ObjectType.Slider || 
+                child.type === ObjectType.ComboBox || 
+                child.type === ObjectType.List
+            );
+
+            if (child.type === ObjectType.Component || isExtensionType) {
                 // Heuristic: A node is "Significant" enough to be its own component if:
-                // 1. It is a Button (functionally distinct)
+                // 1. It is an extension type (Button, ProgressBar, etc.)
                 // 2. It has more than 2 children (e.g., a card or complex group)
                 // 3. It contains children that were themselves already extracted (nested hierarchy)
                 // 4. It has a background/border AND children (Significant visual group)
@@ -44,7 +53,7 @@ export class SubComponentExtractor {
                 const hasVisuals = (child.styles.background || child.styles.backgroundColor || child.styles.border || child.styles.outline);
                 
                 const isSignificant = child.children.length > 2 || 
-                    child.type === ObjectType.Button || 
+                    isExtensionType || 
                     hasNestedExtracted ||
                     (hasVisuals && child.children.length > 0);
 
@@ -89,14 +98,16 @@ export class SubComponentExtractor {
         const findChanges = (curr: UINode) => {
             // 如果节点名包含 'Label' 或 'title'，我们记录其文字覆盖
             if (curr.type === ObjectType.Text && curr.text) {
-                if (curr.name.toLowerCase().includes('label') || curr.name.toLowerCase().includes('title')) {
+                const nl = curr.name.toLowerCase();
+                if (nl.includes('label') || nl.includes('title') || nl.includes('文本') || nl.includes('数值')) {
                     overrides['title'] = curr.text;
                 }
             }
             
             // 如果节点名包含 'Icon' 或 'Image'，记录其图片覆盖
-            if (curr.type === ObjectType.Image && curr.src) {
-                if (curr.name.toLowerCase().includes('icon') || curr.name.toLowerCase().includes('image')) {
+            if ((curr.type === ObjectType.Image || curr.type === ObjectType.Loader) && curr.src) {
+                const nl = curr.name.toLowerCase();
+                if (nl.includes('icon') || nl.includes('image') || nl.includes('图标')) {
                     overrides['icon'] = curr.src;
                 }
             }
@@ -123,10 +134,19 @@ export class SubComponentExtractor {
         
         const cleanNode = this.stripParent(node);
         
-        // 💡 FGUI Button Handling
-        if (node.type === ObjectType.Button) {
-            cleanNode.extention = 'Button';
-            this.applyButtonNaming(cleanNode);
+        // 💡 FGUI Component Extension Handling
+        const extensionMap: Record<number, string> = {
+            [ObjectType.Button]: 'Button',
+            [ObjectType.ProgressBar]: 'ProgressBar',
+            [ObjectType.Slider]: 'Slider',
+            [ObjectType.ComboBox]: 'ComboBox',
+            [ObjectType.Label]: 'Label',
+            [ObjectType.List]: 'List'
+        };
+
+        if (extensionMap[node.type]) {
+            cleanNode.extention = extensionMap[node.type];
+            this.applyStandardNaming(cleanNode);
         }
 
         const compData = JSON.stringify(cleanNode);
@@ -176,28 +196,39 @@ export class SubComponentExtractor {
         return newNode;
     }
 
-    private applyButtonNaming(node: UINode) {
+    private applyStandardNaming(node: UINode) {
         const scan = (curr: UINode) => {
-            // Text -> title
+            const nameLow = curr.name.toLowerCase();
+
+            // 1. Text -> title
             if (curr.type === ObjectType.Text) {
-                const nameLow = curr.name.toLowerCase();
-                if (nameLow.includes('label') || nameLow.includes('title') || nameLow.includes('文本')) {
+                if (nameLow.includes('label') || nameLow.includes('title') || nameLow.includes('文本') || nameLow.includes('数值')) {
                     curr.name = 'title';
                 }
             }
-            // Image/Graph -> icon (convert to Loader)
-            if ((curr.type === ObjectType.Image || curr.type === ObjectType.Graph) && !curr.children?.length) {
-                const nameLow = curr.name.toLowerCase();
+
+            // 2. Image/Graph/Component -> icon (convert to Loader)
+            const isVisual = (curr.type === ObjectType.Image || curr.type === ObjectType.Graph || curr.type === ObjectType.Component);
+            if (isVisual && !curr.children?.length) {
                 if (nameLow.includes('icon') || nameLow.includes('image') || nameLow.includes('图标')) {
                     curr.name = 'icon';
                     curr.type = ObjectType.Loader;
                 }
             }
 
+            // 3. ProgressBar/Slider specific: Bar & Grip
+            if (node.type === ObjectType.ProgressBar || node.type === ObjectType.Slider) {
+                if (nameLow.includes('bar') || nameLow.includes('progress') || nameLow.includes('进度')) {
+                    curr.name = 'bar';
+                }
+                if (nameLow.includes('grip') || nameLow.includes('thumb') || nameLow.includes('滑块')) {
+                    curr.name = 'grip';
+                }
+            }
+
             if (curr.children) curr.children.forEach(scan);
         };
         
-        // Don't rename the root button node itself, only its children
         if (node.children) node.children.forEach(scan);
     }
 }

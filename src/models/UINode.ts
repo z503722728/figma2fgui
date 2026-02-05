@@ -35,6 +35,9 @@ export interface UINode {
     overrides?: Record<string, any>;
     rotation?: number;
     extention?: string;
+    value?: number;
+    max?: number;
+    min?: number;
 }
 
 /**

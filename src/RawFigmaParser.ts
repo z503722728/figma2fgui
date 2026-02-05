@@ -87,6 +87,12 @@ export class RawFigmaParser {
             text: node.characters
         };
 
+        if (uiNode.type === ObjectType.ProgressBar || uiNode.type === ObjectType.Slider) {
+            uiNode.value = 50;
+            uiNode.max = 100;
+            uiNode.min = 0;
+        }
+
         // 💡 进阶逻辑：针对 Frame/Component 本身的背景填充，如果不是单色，则插入一个虚拟的背景节点
         const fillType = uiNode.styles.fillType;
         const hasComplexFills = (node.fills && node.fills.some((f: any) => f.visible !== false && f.type !== 'SOLID')) || 
@@ -126,22 +132,46 @@ export class RawFigmaParser {
         const type = node.type;
         const name = (node.name || "").toLowerCase();
         
-        // 💡 进阶逻辑：将所有具有矢量潜力的节点映射为 Image，以便生成 SVG 保证还原度
+        // 1. Primitive Text nodes ALWAYS return Text
+        if (type === 'TEXT') {
+            return ObjectType.Text;
+        }
+
+        // 2. Vector/Shape nodes ALWAYS return Image (for SVG generation)
         if (type === 'VECTOR' || type === 'STAR' || type === 'REGULAR_POLYGON' || type === 'BOOLEAN_OPERATION' ||
             type === 'RECTANGLE' || type === 'ELLIPSE') {
             return ObjectType.Image;
         }
 
-        if (name.includes('button')) {
-            return ObjectType.Button;
+        // 3. Container nodes can have special FGUI component mappings based on name keywords
+        const isContainer = (type === 'FRAME' || type === 'INSTANCE' || type === 'COMPONENT' || type === 'GROUP');
+        if (isContainer) {
+            if (name.includes('button')) {
+                return ObjectType.Button;
+            }
+            if (name.includes('progress') || name.includes('bar')) {
+                return ObjectType.ProgressBar;
+            }
+            if (name.includes('slider')) {
+                return ObjectType.Slider;
+            }
+            if (name.includes('combo') || name.includes('select')) {
+                return ObjectType.ComboBox;
+            }
+            if (name.includes('list') || name.includes('tree')) {
+                return ObjectType.List;
+            }
+            if (name.includes('label')) {
+                return ObjectType.Label;
+            }
+
+            // Default containers
+            if (type === 'GROUP') return ObjectType.Group;
+            return ObjectType.Component;
         }
 
-        switch (type) {
-            case 'TEXT': return ObjectType.Text;
-            case 'FRAME': case 'INSTANCE': case 'COMPONENT': return ObjectType.Component;
-            case 'GROUP': return ObjectType.Group;
-            default: return ObjectType.Graph;
-        }
+        // Fallback
+        return ObjectType.Graph;
     }
 
     private mapStyles(node: any): any {
