@@ -48,7 +48,8 @@ export class XMLGenerator {
             }
         }
 
-        nodes.forEach(node => {
+        // 💡 Z-ORDER FIX: Reverse iteration because Figma is Front-to-Back, but FGUI XML is Back-to-Front (Painter's Algo)
+        [...nodes].reverse().forEach(node => {
             this.generateNodeXml(node, displayList, buildId, context);
         });
 
@@ -174,7 +175,8 @@ export class XMLGenerator {
                     if (hasChildren) {
                         // FGUI is a flat list per component.
                         // Recursive Flattening: we promote children to the current level, adjusting coordinates.
-                        node.children.forEach(child => {
+                        // 💡 Z-ORDER FIX: Reverse iteration
+                        [...node.children].reverse().forEach(child => {
                             const flattenedChild = { ...child };
                             flattenedChild.x = node.x + child.x;
                             flattenedChild.y = node.y + child.y; 

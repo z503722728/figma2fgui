@@ -283,7 +283,6 @@ async function main() {
             // If Text is misplaced (e.g. negative Y or outside), force center it.
             // Condition: Text node, and (y < 0 or name indicates title/center)
             comp.children.forEach(c => {
-                console.log(`🔍 Checking Child: ${c.name}, Type: ${c.type}, Y: ${c.y}, H: ${c.height}, CompH: ${comp.height}`);
                 const nameLow = c.name.toLowerCase();
                 const isTitleName = nameLow.startsWith('n') || nameLow.includes('title') || nameLow.includes('text') || nameLow.includes('label');
                 const isTextType = c.type === ObjectType.Text || c.type === ObjectType.RichText || c.type === ObjectType.InputText || c.type === ObjectType.Label;
