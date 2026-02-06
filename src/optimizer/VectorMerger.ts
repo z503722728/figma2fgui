@@ -84,6 +84,9 @@ export class VectorMerger {
         // Must NOT be an extracted component
         if (node.asComponent) return false;
         
+        // 💡 Must NOT be an identified resource (e.g. matched PNG)
+        if (node.src) return false;
+
         // Must NOT be Text
         if (node.type === ObjectType.Text || (node.text && node.text.trim().length > 0)) return false;
 

@@ -342,8 +342,12 @@ export class SubComponentExtractor {
             const isVisual = (curr.type === ObjectType.Image || curr.type === ObjectType.Graph || curr.type === ObjectType.Component);
             if (isVisual) {
                 if (nameLow.includes('icon') || nameLow.includes('image') || nameLow.includes('图标') || nameLow.includes('bg') || nameLow.includes('background')) {
-                    curr.name = 'icon';
-                    curr.type = ObjectType.Loader;
+                    // 💡 Only convert to Loader if it's a leaf node, explicit Image, or has assigned resource.
+                    // If it's a container (has children) and no resource, we must traverse children for visuals.
+                    if ((!curr.children || curr.children.length === 0) || curr.src || curr.type === ObjectType.Image) {
+                        curr.name = 'icon';
+                        curr.type = ObjectType.Loader;
+                    }
                 }
             }
 

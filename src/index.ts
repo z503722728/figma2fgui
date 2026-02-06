@@ -95,17 +95,9 @@ async function main() {
     calculator.calculate(rootNodes);
 
     // --- 2.5 矢量合并优化 ---
-    console.log("🌪️ 正在执行矢量合并优化...");
-    const merger = new VectorMerger();
-    merger.merge(rootNodes);
 
-    // --- 3. 智能组件提取 ---
-    console.log("🧩 正在执行智能组件提取...");
-    const extractor = new SubComponentExtractor();
-    const componentResources = extractor.extract(rootNodes);
-
-    // --- 4. 资源处理 ---
-    const allResources: ResourceInfo[] = [...componentResources];
+    // Logic moved to after function definitions
+    const allResources: ResourceInfo[] = [];
     const client = new FigmaClient(FIGMA_TOKEN!, FIGMA_FILE_KEY!);
     
     const vectorNodes: UINode[] = [];
@@ -118,82 +110,267 @@ async function main() {
         console.log(`🖼️ Found ${existingPngs.length} existing PNGs in cache.`);
     }
 
-    const findResourceNodes = (nodes: UINode[]) => {
+    // Pass 1: Scan for existing PNGs (Run BEFORE Merger)
+    const scanForBitmaps = (nodes: UINode[]) => {
         const scanner = (node: UINode) => {
-            // Skip invisible nodes for resource generation
             if (node.visible === false) return;
 
             // 💡 Flexible Check for existing PNG
-            // Strategy: Look for any file in 'existingPngs' that contains the node ID (raw or sanitized)
-            const rawId = node.sourceId || node.id; // e.g. "I1279:7407;1182:7793"
-            const sanitizedId = rawId.replace(/:/g, '_'); // e.g. "I1279_7407;1182_7793" (semicolon preserved)
-            const strictSanitizedId = rawId.replace(/[:;]/g, '_'); // e.g. "I1279_7407_1182_7793"
+            const rawId = node.sourceId || node.id; 
+            const sanitizedId = rawId.replace(/:/g, '_'); 
+            const strictSanitizedId = rawId.replace(/[:;]/g, '_'); 
 
             let foundPng: string | undefined;
 
-            // 1. Try exact match first (fastest)
+            // 1. Direct match (icon_ID.png)
             const exactName = `${sanitizeFileName(node.name)}_${sanitizedId}.png`;
             if (existingPngs.includes(exactName)) foundPng = exactName;
 
-            // 2. Fuzzy match: Check if any file contains the ID
-            if (!foundPng) {
-                // We'll search for the ID part. 
-                // The filename structure is typically "Name_ID.png" or "icon_ID.png"
-                // We check against rawId (unlikely due to OS chars), sanitizedId, and strictSanitizedId.
+            // 2. Fuzzy/Name match (e.g. "icon_BtnBg_ID.png")
+            // 💡 Fix: Must use strict suffix matching to avoid Parent matching Child's ID (which often contains Parent ID prefix)
+            if (!foundPng && node.name) {
                 foundPng = existingPngs.find(f => {
-                    return f.includes(sanitizedId) || f.includes(strictSanitizedId);
+                    const fName = f.toLowerCase();
+                    // Check if file ends with "_ID.png"
+                    // We allow different name prefixes, but the ID part must match exactly at the end.
+                    return fName.endsWith(`_${sanitizedId.toLowerCase()}.png`) || 
+                        fName.endsWith(`_${strictSanitizedId.toLowerCase()}.png`);
                 });
             }
 
-            let handled = false;
-            
             if (foundPng) {
                 console.log(`🖼️ Matched existing PNG for ${node.name}: ${foundPng}`);
-                
-                // We need to ensure we use this EXACT filename for the resource
-                // But 'findResourceNodes' just pushes to lists. 
-                // Actual resource creation happens in 'downloadBitmaps' or valid resource construction.
-                // We'll attach the found filename to the node so we can use it later.
                 node.customProps = node.customProps || {};
                 node.customProps.manualPngName = foundPng;
-
-                if (!bitmapNodes.includes(node)) {
-                    bitmapNodes.push(node);
-                }
-                handled = true; 
+                
+                // 💡 CRITICAL: User request - If PNG exists, ignore children completely.
+                // We clear the children array so no subsequence passes (Merger, Extractor, VectorScan)
+                // even look inside.
+                node.children = [];
+                
+                bitmapNodes.push(node);
+                // Mark as handled so we don't recurse (treat as leaf)
+                return;
             }
 
-            if (!handled) {
-                if (node.type === ObjectType.Image && (node.customProps?.fillGeometry || node.customProps?.mergedPaths)) {
-                    vectorNodes.push(node);
-                }
-                else if (node.styles.fillType === 'image' || node.type === ObjectType.Image || node.type === ObjectType.Loader) {
-                    if (!vectorNodes.includes(node)) {
-                        bitmapNodes.push(node);
-                    }
-                }
-            }
-            if (node.children && !handled) node.children.forEach(scanner);
+            if (node.children) node.children.forEach(scanner);
         };
         nodes.forEach(scanner);
     };
 
-    findResourceNodes(rootNodes);
+    // Pass 2: Scan for Vectors (Run AFTER Merger, BEFORE Extractor)
+    const scanForVectors = (nodes: UINode[]) => {
+        const scanner = (node: UINode) => {
+            if (node.visible === false) return;
 
+            // If already has src (from Pass 1 or manual), skip
+            if (node.src) return;
+
+            // Check for Vector candidacy
+            const isVisual = (node.type === ObjectType.Image || node.type === ObjectType.Graph || 
+                node.type === ObjectType.Component || node.type === ObjectType.Group || 
+                node.type === ObjectType.Loader);
+            
+            // Only convert if it has checks/fills OR it's a merged node
+            const hasVisualProps = (node.styles && (
+                node.styles.fillColor || node.styles.strokeColor || node.styles.imageFill ||
+                (node.styles.filters && node.styles.filters.length > 0)
+            ));
+            const isMerged = node.id.startsWith('merged_');
+            const hasFillPaths = Array.isArray(node.customProps?.fillGeometry) && node.customProps.fillGeometry.length > 0;
+            const hasMergedPaths = Array.isArray(node.customProps?.mergedPaths) && node.customProps.mergedPaths.length > 0;
+
+            if (isVisual && (hasVisualProps || isMerged || hasFillPaths || hasMergedPaths)) {
+                // Generate ID for potential SVG
+                const srcId = (node.sourceId || node.id).replace(/:/g, '_');
+                const resId = `img_${sanitizeFileName(node.name)}_${srcId}`;
+                
+                // Avoid duplicates in vectorNodes if rescanning
+                if (!vectorNodes.includes(node)) {
+                    const res: ResourceInfo = {
+                        id: resId,
+                        name: `${resId}.svg`,
+                        type: 'image',
+                        width: Math.round(node.width),
+                        height: Math.round(node.height),
+                        exported: false
+                    };
+                    
+                    // Only add resource if not already present
+                    if (!allResources.find(r => r.id === res.id)) {
+                        allResources.push(res);
+                    }
+                    
+                    node.src = res.id;
+                    node.fileName = 'img/' + res.name;
+                    vectorNodes.push(node); // Enqueue for SVG generation
+                    
+                    return; // Treat as leaf for vectorization
+                }
+            }
+
+            if (node.children) node.children.forEach(scanner);
+        };
+        nodes.forEach(scanner);
+    };
+
+    // --- Step 1: Scan for Bitmaps (Pre-Merge) ---
+    // This allows us to identify nodes that map to existing PNGs, preventing them from being merged.
+    console.log("🔍 Scanning for existing bitmaps...");
+    scanForBitmaps(rootNodes);
+
+    // --- Step 2: Vector Merging ---
+    // Now runs AFTER bitmap scan (skipping identified bitmaps)
+    console.log("🌪️ 正在执行矢量合并优化...");
+    const merger = new VectorMerger();
+    merger.merge(rootNodes);
+
+    // --- Step 3: Component Extraction ---
+    console.log("🧩 正在执行智能组件提取...");
+    const extractor = new SubComponentExtractor();
+    const componentResources = extractor.extract(rootNodes);
+
+    // --- Step 4: Post-Extraction Scan (Vectors & Remaining Bitmaps) ---
+    // 4a. Scan Extracted Components (CRITICAL: Must re-serialize changes!)
+    // Populate allResources with components first
+    allResources.push(...componentResources);
+    
     const extractedNodesMap = new Map<string, UINode>();
+    
+    // --- Definition of Normalization Logic ---
+    // --- Definition of Layout Justification Logic ---
+    const justifyComponentLayout = (comp: UINode, res?: ResourceInfo) => {
+        if (!comp.children || comp.children.length === 0) return;
+
+        // 1. Identify "Background" Node
+        // Heuristic: Name contains 'bg'/'background' OR it's the largest child matching component size approx OR it's the first child Image
+        let bgNode: UINode | undefined;
+        let maxArea = 0;
+
+        comp.children.forEach(c => {
+            const nameLow = c.name.toLowerCase();
+            const area = c.width * c.height;
+            const isPotentialBg = (nameLow.includes('bg') || nameLow.includes('background') || nameLow.includes('底'));
+            
+            if (isPotentialBg) {
+                if (!bgNode || area > maxArea) {
+                    bgNode = c;
+                    maxArea = area;
+                }
+            }
+        });
+
+        // 2. Normalization Strategy
+        if (bgNode) {
+            console.log(`📏 Justifying ${comp.name} based on Background: ${bgNode.name} (${bgNode.width}x${bgNode.height})`);
+            
+            // A. Shift everything so Background is at (0,0)
+            const offsetX = -bgNode.x;
+            const offsetY = -bgNode.y;
+
+            if (offsetX !== 0 || offsetY !== 0) {
+                comp.children.forEach(c => {
+                    c.x += offsetX;
+                    c.y += offsetY;
+                });
+            }
+
+            // B. Set Component Size to Background Size (User Requirement)
+            comp.width = bgNode.width;
+            comp.height = bgNode.height;
+
+            // C. Auto-Center Text (Good Taste)
+            // If Text is misplaced (e.g. negative Y or outside), force center it.
+            // Condition: Text node, and (y < 0 or name indicates title/center)
+            comp.children.forEach(c => {
+                console.log(`🔍 Checking Child: ${c.name}, Type: ${c.type}, Y: ${c.y}, H: ${c.height}, CompH: ${comp.height}`);
+                const nameLow = c.name.toLowerCase();
+                const isTitleName = nameLow.startsWith('n') || nameLow.includes('title') || nameLow.includes('text') || nameLow.includes('label');
+                const isTextType = c.type === ObjectType.Text || c.type === ObjectType.RichText || c.type === ObjectType.InputText || c.type === ObjectType.Label;
+                const isContainerType = c.type === ObjectType.Component || c.type === ObjectType.Group || c.type === ObjectType.Graph;
+
+                if (isTextType || (isContainerType && isTitleName)) {
+                    const isOutside = c.y < 0 || c.y + c.height > comp.height;
+                    
+                    if (isOutside) {
+                        const newY = Math.round((comp.height - c.height) / 2);
+                        console.log(`🎯 Auto-centering Text ${c.name}: ${c.y} -> ${newY}`);
+                        c.y = newY;
+                        
+                        // Also center Horizontal if needed?
+                        // If it deviates too much, maybe? Let's check X.
+                        // For now trust X unless also negative.
+                        if (c.x < 0) {
+                            const newX = Math.round((comp.width - c.width) / 2);
+                            c.x = newX;
+                        }
+                    }
+                }
+            });
+
+        } else {
+            // Fallback: Standard Normalization (Shift to 0,0)
+            let minX = 0, minY = 0, maxX = comp.width, maxY = comp.height;
+            let hasNegative = false;
+            
+            comp.children.forEach(c => {
+                if (c.x < minX) { minX = c.x; hasNegative = true; }
+                if (c.y < minY) { minY = c.y; hasNegative = true; }
+                if (c.x + c.width > maxX) maxX = c.x + c.width;
+                if (c.y + c.height > maxY) maxY = c.y + c.height;
+            });
+
+            if (hasNegative) {
+                const offsetX = minX < 0 ? -minX : 0;
+                const offsetY = minY < 0 ? -minY : 0;
+                console.log(`📏 Normalizing ${comp.name}: Shifting bounds by (${offsetX}, ${offsetY})`);
+
+                comp.children.forEach(c => {
+                    c.x += offsetX;
+                    c.y += offsetY;
+                });
+                comp.width = Math.max(comp.width, maxX + offsetX);
+                comp.height = Math.max(comp.height, maxY + offsetY);
+            }
+        }
+
+        // Update Resource Info if provided
+        if (res) {
+            res.width = comp.width;
+            res.height = comp.height;
+        }
+    };
+
     componentResources.forEach(res => {
         if (res.data) {
             try {
                 const compRootFn = JSON.parse(res.data) as UINode;
                 extractedNodesMap.set(res.id, compRootFn);
-                findResourceNodes([compRootFn]); 
+                
+                // Scan content for vectors/bitmaps that need processing
+                scanForBitmaps([compRootFn]);
+                scanForVectors([compRootFn]);
+
+                // 💡 NORMALIZE (Extracted Components)
+                justifyComponentLayout(compRootFn, res);
+                
+                // 💡 CRITICAL: Save the updated node (with .src assigned) back to the resource
+                res.data = JSON.stringify(compRootFn);
             } catch (e) {
                 console.warn(`Failed to parse/scan component resource: ${res.name}`, e);
             }
         }
     });
 
+    // 4b. Scan Root Nodes (for anything left in the main tree)
+    scanForVectors(rootNodes);
+
+    // 💡 NORMALIZE (Root Nodes)
+    rootNodes.forEach(root => justifyComponentLayout(root));
+
     await fs.ensureDir(imgDir);
+
+
 
     const renderSvg = async (node: UINode, suffix: string = ""): Promise<ResourceInfo | null> => {
         const nodeIdStr = (node.sourceId || node.id).replace(/:/g, '_');
@@ -463,7 +640,7 @@ async function main() {
         }
     }
 
-    console.log("Root Nodes:", rootNodes.map(n => n.name));
+
     for (const node of rootNodes) {
         if (!node.children?.length && !node.styles.fillType) continue; 
         
