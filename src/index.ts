@@ -60,6 +60,8 @@ async function main() {
 
     let rootNodes: UINode[] = [];
     let figmaData: any;
+    let isFreshPull = false;
+
 
     // --- 1. 获取数据阶段 ---
     if (await fs.pathExists(debugJsonPath)) {
@@ -81,6 +83,7 @@ async function main() {
         await fs.ensureDir(packagePath);
         await fs.writeFile(debugJsonPath, JSON.stringify(figmaData, null, 2));
         console.log(`🐛 原始 Figma 数据已保存至: ${debugJsonPath}`);
+        isFreshPull = true;
     } else if (!figmaData) {
         console.error("❌ 缺少本地缓存且缺少 Figma 凭据，无法获取数据。请检查 .env 文件。");
         process.exit(1);
@@ -213,6 +216,108 @@ async function main() {
         };
         nodes.forEach(scanner);
     };
+
+    // --- Step 0.5: Prefetch PNGs (New Feature) ---
+    // Automatically fetch PNGs for nodes that "look like" images but aren't in cache yet.
+    const prefetchPngs = async (nodes: UINode[]) => {
+        console.log("🔍 Scanning for PNG candidates to prefetch...");
+        const candidates: UINode[] = [];
+        
+        const finder = (node: UINode) => {
+            if (node.visible === false) return;
+             
+            // Check if already cached
+            const rawId = node.sourceId || node.id;
+            const sanitizedId = rawId.replace(/:/g, '_');
+            const strictSanitizedId = rawId.replace(/[:;]/g, '_');
+             
+            // Quick check if file exists (loose or strict)
+            const alreadyCached = existingPngs.some(f => {
+                const fName = f.toLowerCase();
+                return fName.endsWith(`_${sanitizedId.toLowerCase()}.png`) || 
+                    fName.endsWith(`_${strictSanitizedId.toLowerCase()}.png`);
+            });
+             
+            if (alreadyCached) return;
+
+            // Heuristic for "Should be PNG":
+            // 1. Name starts with 'icon' or 'img'
+            // 2. Name contains 'bg' / 'background' AND it's a vector-like type (not just a frame)
+            // 3. Explicitly typed as Image (but no src yet)
+            const nameLow = node.name.toLowerCase();
+            const isIcon = nameLow.startsWith('icon') || nameLow.startsWith('img');
+            const isBg = nameLow.includes('bg') || nameLow.includes('background') || nameLow.includes('底');
+             
+            // We only prefetch if it's not a basic Text node or generic Group unless it matches naming convention
+            if (node.type !== ObjectType.Text) {
+                if (isIcon || isBg || node.type === ObjectType.Image) {
+                    candidates.push(node);
+                    // Don't recurse into candidates we intend to rasterize entirely
+                    // return; 
+                    // Actually, we might want to be careful. If we prefetch a container, we assume it's a leaf.
+                    // But let's stick to the prunign logic: if we download it, we prune it later.
+                    return; 
+                }
+            }
+
+            if (node.children) node.children.forEach(finder);
+        };
+        nodes.forEach(finder);
+
+        if (candidates.length === 0) {
+            console.log("✅ No new PNG candidates found.");
+            return;
+        }
+
+        console.log(`🚀 Found ${candidates.length} candidates for PNG prefetch. Fetching URLs...`);
+        const ids = candidates.map(n => n.sourceId || n.id);
+        
+        try {
+            // Batch Request URLs
+            const images = await client.getImageUrls(ids, 'png'); // returns { nodeId: url }
+            
+            if (!images) {
+                console.warn("⚠️ Failed to get image URLs from Figma.");
+                return;
+            }
+
+            const downloadPromises: Promise<void>[] = [];
+            
+            // Map back to nodes to determine filenames
+            for (const node of candidates) {
+                const id = node.sourceId || node.id;
+                const url = images[id];
+                if (url) {
+                    const sanitizedId = id.replace(/:/g, '_');
+                    const fileName = `${sanitizeFileName(node.name)}_${sanitizedId}.png`;
+                    const filePath = path.join(imgDir, fileName);
+                    
+                    console.log(`⬇️ Downloading: ${fileName}`);
+                    downloadPromises.push(
+                        client.downloadImage(url, filePath).then(() => {
+                            existingPngs.push(fileName); // Update cache list so next step finds it
+                        }).catch(e => {
+                            console.error(`❌ Failed to download ${fileName}:`, e.message);
+                        })
+                    );
+                }
+            }
+            
+            await Promise.all(downloadPromises);
+            console.log(`✨ Prefetch complete. new cache size: ${existingPngs.length}`);
+
+        } catch (e) {
+            console.error("⚠️ Prefetch encountered an error:", e);
+        }
+    };
+
+    // Execute Prefetch
+    if (isFreshPull) {
+        console.log("⬇️ 正在检查并预取 PNG 资源...");
+        await prefetchPngs(rootNodes);
+    } else {
+        console.log("⏩ 跳过 PNG 预取 (使用本地缓存数据)...");
+    }
 
     // --- Step 1: Scan for Bitmaps (Pre-Merge) ---
     // This allows us to identify nodes that map to existing PNGs, preventing them from being merged.
