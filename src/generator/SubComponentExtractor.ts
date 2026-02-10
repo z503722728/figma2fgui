@@ -86,6 +86,25 @@ export class SubComponentExtractor {
                 this.applyStandardNaming(cleanNode);
             }
 
+            // 💡 将 multiLooks 和 gearIcon 从组件根节点传播到 "icon" 子节点。
+            // analyzeMultiLooks 将 multiLooks/gears 设置在组件根上，
+            // 但 ImagePipeline.scanAndEnqueue 检查的是被扫描节点自身的 multiLooks。
+            // FGUI 中实际切换图片的是 icon Loader，所以需要将 multiLooks 移到 icon 上。
+            if (cleanNode.multiLooks && cleanNode.children) {
+                const iconChild = cleanNode.children.find(c => c.name === 'icon');
+                if (iconChild) {
+                    iconChild.multiLooks = cleanNode.multiLooks;
+                    // 将 gearIcon 类型的 gear 移到 icon 子节点
+                    const gearIcons = (cleanNode.gears || []).filter(g => g.type === 'gearIcon');
+                    if (gearIcons.length > 0) {
+                        iconChild.gears = (iconChild.gears || []).concat(gearIcons);
+                    }
+                    // 从根节点移除（避免重复）
+                    delete cleanNode.multiLooks;
+                    cleanNode.gears = (cleanNode.gears || []).filter(g => g.type !== 'gearIcon');
+                }
+            }
+
             cachedRes.data = JSON.stringify(cleanNode);
             this._newResources.push(cachedRes);
         }
@@ -151,7 +170,8 @@ export class SubComponentExtractor {
                 this._candidateGroups.set(hash, []);
             }
             this._candidateGroups.get(hash)!.push(node);
-            node.asComponent = true; 
+            node.asComponent = true;
+            node._structuralHash = hash; // 💡 缓存原始 hash，Phase 3 变换后子树会变化导致重算不一致
         }
     }
 
@@ -198,7 +218,9 @@ export class SubComponentExtractor {
             const child = node.children[i];
             
             if (child.asComponent) {
-                const hash = this.calculateStructuralHash(child);
+                // 💡 使用缓存的 hash：Phase 3a 变换候选节点后，子树结构已变化，
+                // 重新计算 hash 会得到不同的值，导致在 _componentCache 中找不到资源。
+                const hash = child._structuralHash || this.calculateStructuralHash(child);
                 const compRes = this._componentCache.get(hash);
 
                 if (compRes) {
@@ -241,13 +263,58 @@ export class SubComponentExtractor {
         // 💡 SSR Strategy: Instead of diffing styles and re-rendering locally,
         // we record each instance's sourceId so the ImagePipeline can request
         // separate SSR renders for each visual state.
-        instances.forEach((inst) => {
-            const pageId = this.extractInstanceActiveState(inst);
-            if (pageId === 0) return; // Skip "normal" state (canonical is normal)
 
-            // Record the instance's sourceId for this state
-            canonical.multiLooks = canonical.multiLooks || {};
-            canonical.multiLooks[pageId] = { sourceId: inst.sourceId || inst.id };
+        // --- 阶段 A：计算视觉指纹，按外观分组 ---
+        const fingerprints = instances.map(inst => this.computeVisualFingerprint(inst));
+        const canonicalFP = fingerprints[0];
+
+        // 按指纹分组
+        const fpGroups = new Map<string, UINode[]>();
+        instances.forEach((inst, i) => {
+            const fp = fingerprints[i];
+            if (!fpGroups.has(fp)) fpGroups.set(fp, []);
+            fpGroups.get(fp)!.push(inst);
+        });
+
+        const hasVisualVariants = fpGroups.size > 1;
+
+        if (hasVisualVariants) {
+            // --- 阶段 B：视觉差异驱动的 multiLooks ---
+            // 多个视觉变体（如不同颜色的按钮背景），为每个独特变体创建 SSR 图片
+            console.log(`🎨 [MultiLooks] Found ${fpGroups.size} visual variants for "${canonical.name}" across ${instances.length} instances`);
+
+            let nextPageId = 1;
+            const usedPageIds = new Set<number>([0]); // 0 已被默认变体占用
+
+            for (const [fp, group] of fpGroups.entries()) {
+                if (fp === canonicalFP) {
+                    // 默认变体 (pageId 0)：标记实例为 normal
+                    group.forEach(inst => { inst._variantPageId = 0; });
+                    continue;
+                }
+
+                // 尝试用名称关键词确定语义化的 pageId
+                // 💡 如果该 pageId 已被其他变体占用，回退到顺序分配
+                let pageId = nextPageId++;
+                const nameBasedPage = this.extractInstanceActiveState(group[0]);
+                if (nameBasedPage > 0 && !usedPageIds.has(nameBasedPage)) {
+                    pageId = nameBasedPage;
+                }
+                // 确保 pageId 唯一
+                while (usedPageIds.has(pageId)) {
+                    pageId = nextPageId++;
+                }
+                usedPageIds.add(pageId);
+
+                // Record multiLook variant
+                canonical.multiLooks = canonical.multiLooks || {};
+                canonical.multiLooks[pageId] = { sourceId: group[0].sourceId || group[0].id };
+
+                // 标记该组所有实例的 pageId
+                group.forEach(inst => { inst._variantPageId = pageId; });
+
+                console.log(`   → Variant pageId=${pageId} from instance "${group[0].name}" (sourceId: ${group[0].sourceId || group[0].id})`);
+            }
 
             // Ensure gearIcon gear exists
             canonical.gears = canonical.gears || [];
@@ -257,7 +324,43 @@ export class SubComponentExtractor {
                     controller: (canonical.extention === 'Button' || canonical.type === ObjectType.Button) ? 'button' : 'state'
                 });
             }
-        });
+        } else {
+            // --- 阶段 C：所有实例视觉一致，回退到名称关键词检测 ---
+            instances.forEach((inst) => {
+                const pageId = this.extractInstanceActiveState(inst);
+                if (pageId === 0) return; // Skip "normal" state (canonical is normal)
+
+                canonical.multiLooks = canonical.multiLooks || {};
+                canonical.multiLooks[pageId] = { sourceId: inst.sourceId || inst.id };
+
+                canonical.gears = canonical.gears || [];
+                if (!canonical.gears.find(g => g.type === 'gearIcon')) {
+                    canonical.gears.push({
+                        type: 'gearIcon',
+                        controller: (canonical.extention === 'Button' || canonical.type === ObjectType.Button) ? 'button' : 'state'
+                    });
+                }
+            });
+        }
+    }
+
+    /**
+     * 计算节点子树的视觉指纹（填充色 + 描边色），用于区分同结构但不同颜色的实例。
+     * 忽略文本内容差异，仅关注视觉属性。
+     */
+    private computeVisualFingerprint(node: UINode): string {
+        const parts: string[] = [];
+        const collectColors = (curr: UINode) => {
+            if (curr.styles.fillColor && curr.styles.fillColor !== 'transparent') {
+                parts.push(curr.name + ':fill:' + curr.styles.fillColor);
+            }
+            if (curr.styles.strokeColor) {
+                parts.push(curr.name + ':stroke:' + curr.styles.strokeColor);
+            }
+            if (curr.children) curr.children.forEach(collectColors);
+        };
+        if (node.children) node.children.forEach(collectColors);
+        return parts.join('|');
     }
 
     private computeStyleDiff(node1: UINode, node2: UINode): any {
@@ -513,9 +616,17 @@ export class SubComponentExtractor {
     }
 
     /**
-     * Determines which controller page an instance should show based on visible state layers.
+     * Determines which controller page an instance should show.
+     * Priority:
+     *  1. 视觉变体检测分配的 _variantPageId (from analyzeMultiLooks)
+     *  2. 名称关键词检测 (fallback)
      */
     private extractInstanceActiveState(instanceNode: UINode): number {
+        // 💡 优先使用视觉变体检测结果
+        if (instanceNode._variantPageId !== undefined) {
+            return instanceNode._variantPageId;
+        }
+
         const stateKeywords = {
             'selected': ['selected', '选中', 'checked'],
             'over': ['over', 'hover', '悬停'],

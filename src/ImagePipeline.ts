@@ -108,8 +108,15 @@ export class ImagePipeline {
     public scanAndEnqueue(nodes: UINode[], allResources: ResourceInfo[]): void {
         const visit = (node: UINode) => {
             if (node.visible === false) return;
+
             // Already has a resource assigned (e.g. from manual PNG matching)
-            if (node.src) return;
+            // 💡 但如果有 multiLooks，仍需处理变体图片的入队
+            if (node.src) {
+                if (node.multiLooks) {
+                    this.enqueueMultiLooks(node, node.src, allResources);
+                }
+                return;
+            }
 
             const isVisualLeaf = this.isVisualLeaf(node);
 
@@ -122,34 +129,7 @@ export class ImagePipeline {
 
                 // 2. Enqueue multi-state looks
                 if (node.multiLooks) {
-                    const pageIds = Object.keys(node.multiLooks).map(Number);
-                    const lookResMap: Record<number, string> = { 0: res.id };
-
-                    for (const pageId of pageIds) {
-                        const lookData = node.multiLooks[pageId];
-                        if (lookData && lookData.sourceId) {
-                            // Create a temporary node with the instance's sourceId
-                            const lookNode: UINode = {
-                                ...node,
-                                sourceId: lookData.sourceId,
-                                multiLooks: undefined, // Prevent infinite recursion
-                            };
-                            const lookRes = this.enqueue(lookNode, `_page${pageId}`);
-                            allResources.push(lookRes);
-                            lookResMap[pageId] = lookRes.id;
-                        }
-                    }
-
-                    // Update gearIcon values
-                    const gear = node.gears?.find(g => g.type === 'gearIcon');
-                    if (gear) {
-                        const maxPage = Math.max(...pageIds, 3);
-                        const values: string[] = [];
-                        for (let p = 0; p <= maxPage; p++) {
-                            values.push(lookResMap[p] || res.id);
-                        }
-                        gear.values = values.join('|');
-                    }
+                    this.enqueueMultiLooks(node, res.id, allResources);
                 }
 
                 return; // Treat as leaf — don't recurse into children
@@ -160,6 +140,45 @@ export class ImagePipeline {
         };
 
         nodes.forEach(visit);
+    }
+
+    /**
+     * 处理 multiLooks 变体图片入队：为每个视觉变体创建独立的 SSR 图片资源，
+     * 并更新 gearIcon 的 values 属性。
+     * @param node 拥有 multiLooks 的节点
+     * @param baseResId 基础（默认）图片资源 ID
+     * @param allResources 全局资源列表
+     */
+    private enqueueMultiLooks(node: UINode, baseResId: string, allResources: ResourceInfo[]): void {
+        if (!node.multiLooks) return;
+
+        const pageIds = Object.keys(node.multiLooks).map(Number);
+        const lookResMap: Record<number, string> = { 0: baseResId };
+
+        for (const pageId of pageIds) {
+            const lookData = node.multiLooks[pageId];
+            if (lookData && lookData.sourceId) {
+                const lookNode: UINode = {
+                    ...node,
+                    sourceId: lookData.sourceId,
+                    multiLooks: undefined,
+                };
+                const lookRes = this.enqueue(lookNode, `_page${pageId}`);
+                allResources.push(lookRes);
+                lookResMap[pageId] = lookRes.id;
+            }
+        }
+
+        // Update gearIcon values
+        const gear = node.gears?.find(g => g.type === 'gearIcon');
+        if (gear) {
+            const maxPage = Math.max(...pageIds, 3);
+            const values: string[] = [];
+            for (let p = 0; p <= maxPage; p++) {
+                values.push(lookResMap[p] || baseResId);
+            }
+            gear.values = values.join('|');
+        }
     }
 
     /**

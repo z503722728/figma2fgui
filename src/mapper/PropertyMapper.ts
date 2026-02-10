@@ -17,7 +17,12 @@ export class PropertyMapper {
         // use_absolute_bounds=false so effects (shadows, blurs, strokes) are included in the PNG.
         // We need to expand position/size to match the larger actual image.
         // For non-image nodes (text, graph, etc.), padding stays 0.
-        const padding = node.src ? getVisualPadding(node) : 0;
+        //
+        // 💡 ICON EXCEPTION: FGUI Button/ProgressBar 的 "icon" 节点应当使用组件逻辑尺寸，
+        // 而非包含视觉效果（阴影/描边溢出）的物理尺寸。SSR 图片虽然包含效果，
+        // 但 Loader 的 fill 模式会自动缩放适配。跳过 padding 可避免 icon 溢出组件边界。
+        const isIconLoader = node.name === 'icon' && node.type === ObjectType.Loader && node.src;
+        const padding = (node.src && !isIconLoader) ? getVisualPadding(node) : 0;
         
         // 💡 SCALING: Apply global FGUI_SCALE to all spatial coordinates and sizes
         const x = (node.x - padding) * FGUI_SCALE;

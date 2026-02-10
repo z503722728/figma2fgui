@@ -51,6 +51,8 @@ export interface UINode {
 
     // Component Extraction Flag
     asComponent?: boolean;
+    _structuralHash?: string; // 缓存的结构 hash，用于 SubComponentExtractor 跨阶段查找
+    _variantPageId?: number;  // 视觉变体检测分配的 pageId，用于 multiLooks 系统
     
     // 💡 属性覆盖数据
     overrides?: Record<string, any>;

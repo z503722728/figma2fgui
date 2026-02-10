@@ -158,7 +158,9 @@ export class RawFigmaParser {
             if (name.includes('button')) {
                 return ObjectType.Button;
             }
-            if (name.includes('progress') || name.includes('bar')) {
+            // 💡 仅匹配 "progress" 关键词，不再单独匹配 "bar"
+            // 避免 "TopBar"/"Toolbar"/"Sidebar"/"Navbar" 等误判为 ProgressBar
+            if (name.includes('progress')) {
                 return ObjectType.ProgressBar;
             }
             if (name.includes('slider')) {
