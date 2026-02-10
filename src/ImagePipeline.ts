@@ -3,7 +3,7 @@ import * as path from 'path';
 import { FigmaClient } from './FigmaClient';
 import { UINode, ResourceInfo } from './models/UINode';
 import { ObjectType } from './models/FGUIEnum';
-import { sanitizeFileName } from './Common';
+import { sanitizeFileName, FGUI_SCALE } from './Common';
 
 /**
  * Cache manifest structure for version-aware caching.
@@ -59,7 +59,7 @@ export class ImagePipeline {
     private static readonly BATCH_SIZE = 50;
     private static readonly CONCURRENCY = 5;
     private static readonly BATCH_DELAY_MS = 100;
-    private static readonly SCALE = 2;  // 2x for retina clarity
+    private static readonly SCALE = FGUI_SCALE;  // 2x for retina clarity
     
     constructor(client: FigmaClient, imgDir: string, figmaVersion: string) {
         this.client = client;
@@ -84,8 +84,8 @@ export class ImagePipeline {
             id: resId,
             name: fileName,
             type: 'image',
-            width: Math.round(node.width),
-            height: Math.round(node.height),
+            width: Math.round(node.width * ImagePipeline.SCALE),
+            height: Math.round(node.height * ImagePipeline.SCALE),
         };
     }
 

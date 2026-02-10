@@ -11,6 +11,8 @@ export enum ItemType {
     TEXT = 'text'
 }
 
+export const FGUI_SCALE = 2; // Global scale factor for FGUI output (matches ImagePipeline 2x)
+
 /**
  * Calculates visual padding required to avoid clipping of strokes and shadows.
  * @param node UI node with styles

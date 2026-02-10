@@ -1,6 +1,7 @@
 import axios from 'axios';
 import * as fs from 'fs-extra';
 import * as path from 'path';
+import { FGUI_SCALE } from './Common';
 
 /**
  * FigmaClient: 负责与 Figma REST API 交互
@@ -60,7 +61,7 @@ export class FigmaClient {
             params: {
                 ids: ids.join(','),
                 format: format,
-                scale: 2,
+                scale: FGUI_SCALE,
                 use_absolute_bounds: true
             },
             headers: { 'X-Figma-Token': this.token }

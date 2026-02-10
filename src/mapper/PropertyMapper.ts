@@ -1,6 +1,6 @@
 import { ObjectType, LoaderFillType, AlignType, VertAlignType } from "../models/FGUIEnum";
 import { UINode } from "../models/UINode";
-import { getVisualPadding } from "../Common";
+import { getVisualPadding, FGUI_SCALE } from "../Common";
 
 /**
  * PropertyMapper: Translates CSS and React properties into FGUI-specific attributes.
@@ -13,13 +13,22 @@ export class PropertyMapper {
     public mapAttributes(node: UINode, assignedId?: string): Record<string, string> {
         // Log style keys for debugging if necessary
         const s = node.styles;
-        const padding = getVisualPadding(node);
+        // 💡 PADDING FIX: Force padding to 0. Since we download images using use_absolute_bounds: true,
+        // the PNG matches the logical node size exactly. We should NOT add visual padding for shadows/strokes
+        // that are excluded from the image anyway.
+        const padding = 0; // getVisualPadding(node);
         
+        // 💡 SCALING: Apply global FGUI_SCALE to all spatial coordinates and sizes
+        const x = (node.x - padding) * FGUI_SCALE;
+        const y = (node.y - padding) * FGUI_SCALE;
+        const w = (parseFloat(s.width || node.width.toString()) + padding * 2) * FGUI_SCALE;
+        const h = (parseFloat(s.height || node.height.toString()) + padding * 2) * FGUI_SCALE;
+
         const attr: Record<string, string> = {
             id: assignedId || node.id || 'n' + Math.random().toString(36).substring(2, 5),
             name: (assignedId && node.name !== 'title' && node.name !== 'icon') ? assignedId : (node.name || 'n0'),
-            xy: `${Math.round(node.x - padding)},${Math.round(node.y - padding)}`,
-            size: `${Math.round(parseFloat(s.width || node.width.toString()) + padding * 2)},${Math.round(parseFloat(s.height || node.height.toString()) + padding * 2)}`
+            xy: `${Math.round(x)},${Math.round(y)}`,
+            size: `${Math.round(w)},${Math.round(h)}`
         };
 
         // 1. Map Common Visual Properties
@@ -53,7 +62,10 @@ export class PropertyMapper {
 
     private mapTextProperties(node: UINode, attr: Record<string, string>): void {
         const s = node.styles;
-        attr.fontSize = Math.round(parseFloat((s['font-size'] || s.fontSize || "12").toString())).toString();
+        // 💡 SCALING: Font size
+        const rawFontSize = parseFloat((s['font-size'] || s.fontSize || "12").toString());
+        attr.fontSize = Math.round(rawFontSize * FGUI_SCALE).toString();
+        
         attr.color = this.formatColor(s.color || "#000000");
         
         // Alignment mapping
@@ -88,7 +100,8 @@ export class PropertyMapper {
         if (s.italic) attr.italic = "true";
         if (s.underline) attr.underline = "true";
         if (s.strokeSize) {
-            attr.strokeSize = s.strokeSize.toString();
+            // 💡 SCALING: Stroke size
+            attr.strokeSize = (parseFloat(s.strokeSize) * FGUI_SCALE).toString();
             attr.strokeColor = this.formatColor(s.strokeColor || "#000000");
         }
 
@@ -115,7 +128,9 @@ export class PropertyMapper {
         }
         
         if (s.cornerRadius || s['border-radius'] || s.borderRadius) {
-            attr.corner = (s.cornerRadius || s['border-radius'] || s.borderRadius).toString().replace('px', '');
+            // 💡 SCALING: Corner radius
+            const rawCorner = parseFloat((s.cornerRadius || s['border-radius'] || s.borderRadius).toString().replace('px', ''));
+            attr.corner = (rawCorner * FGUI_SCALE).toString();
         }
 
         // 4. Map Stroke (lineSize, lineColor)
@@ -123,7 +138,10 @@ export class PropertyMapper {
         const strokeSize = s.strokeSize || s['outline-width'] || s.outlineWidth || s['border-width'] || s.borderWidth;
         
         if (strokeColor) attr.lineColor = this.formatColor(strokeColor);
-        if (strokeSize) attr.lineSize = strokeSize.toString().replace('px', '');
+        if (strokeSize) {
+            // 💡 SCALING: Line size
+            attr.lineSize = (parseFloat(strokeSize.toString().replace('px', '')) * FGUI_SCALE).toString();
+        }
     }
 
     /**

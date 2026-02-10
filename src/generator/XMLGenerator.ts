@@ -2,6 +2,7 @@ import * as xmlbuilder from 'xmlbuilder';
 import { UINode, ResourceInfo } from '../models/UINode';
 import { ObjectType } from '../models/FGUIEnum';
 import { PropertyMapper } from '../mapper/PropertyMapper';
+import { FGUI_SCALE } from '../Common';
 
 /**
  * XMLGenerator: Responsible for producing valid FGUI XML files.
@@ -14,7 +15,7 @@ export class XMLGenerator {
      * Recursively processes children if present in the 'nodes' tree.
      */
     public generateComponentXml(nodes: UINode[], buildId: string, width: number = 1440, height: number = 1024, rootStyles?: Record<string, any>, extention?: string, controllers?: any[]): string {
-        const component = xmlbuilder.create('component').att('size', `${width},${height}`);
+        const component = xmlbuilder.create('component').att('size', `${width * FGUI_SCALE},${height * FGUI_SCALE}`);
         if (extention) component.att('extention', extention);
 
         // 💡 写入控制器 (Controllers)
@@ -48,8 +49,10 @@ export class XMLGenerator {
             }
         }
 
-        // 💡 Z-ORDER FIX: Reverse iteration because Figma is Front-to-Back, but FGUI XML is Back-to-Front (Painter's Algo)
-        [...nodes].reverse().forEach(node => {
+        // 💡 Z-ORDER FIX: Figma parser outputs children in Paint Order (Bottom-to-Top).
+        // FGUI XML renders in order (Painter's Algo: First = Bottom, Last = Top).
+        // So we iterate forward. Do NOT reverse.
+        nodes.forEach(node => {
             this.generateNodeXml(node, displayList, buildId, context);
         });
 
@@ -149,6 +152,14 @@ export class XMLGenerator {
                 case ObjectType.Slider:
                 case ObjectType.ComboBox:
                 case ObjectType.Label:
+                    // 💡 If the pipeline assigned an SSR image (src), render as image/loader
+                    // instead of flattening children. This handles pure-shape INSTANCE nodes
+                    // (like BtnBg) that are rendered as single images by SSR.
+                    if (node.src) {
+                        eleName = (node.multiLooks && Object.keys(node.multiLooks).length > 0) ? 'loader' : 'image';
+                        break;
+                    }
+
                     // If it's a container that wasn't extracted, we flatten its children.
                     const testAttr = this._mapper.mapAttributes(node, "test");
                     const hasVisuals = testAttr.fillColor || (testAttr.lineColor && testAttr.lineSize);
@@ -193,18 +204,21 @@ export class XMLGenerator {
         
 
         // Apply type-specific post-mapping
-        if (node.type === ObjectType.Image && node.src) {
-            // 💡 如果是被转换为 loader 的 Image (因为 multiLooks)，使用 url 而不是 src
-            // FGUI 格式: ui://packageIdresId (无斜杠分隔)
-            if (node.multiLooks && Object.keys(node.multiLooks).length > 0) {
+        // 💡 General handling for any node with an assigned SSR image (including pure-shape Containers)
+        if (node.src) {
+            // 💡 If converted to loader (e.g. multiLooks or just loader type), use url
+            // FGUI Format: ui://packageIdresId
+            if ((node.multiLooks && Object.keys(node.multiLooks).length > 0) || node.type === ObjectType.Loader) {
                 attributes.url = `ui://${buildId}${node.src}`;
             } else {
                 attributes.src = node.src;
                 if (node.fileName) attributes.fileName = node.fileName;
             }
+            // Cleanup shape attributes that shouldn't be on an image/loader
             delete attributes.fill;
-        } else if (node.type === ObjectType.Loader && node.src) {
-            attributes.url = `ui://${buildId}${node.src}`;
+            delete attributes.fillColor;
+            delete attributes.lineColor;
+            delete attributes.type; // Remove 'rect' etc.
         } else if (node.type === ObjectType.InputText) {
             attributes.input = "true";
         }

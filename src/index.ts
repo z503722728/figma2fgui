@@ -10,7 +10,7 @@ import { FigmaClient } from './FigmaClient';
 import { ImagePipeline } from './ImagePipeline';
 import { UINode, ResourceInfo } from './models/UINode';
 import { ObjectType } from './models/FGUIEnum';
-import { sanitizeFileName } from './Common';
+import { sanitizeFileName, FGUI_SCALE } from './Common';
 
 dotenv.config();
 
@@ -301,26 +301,33 @@ async function main() {
     const generator = new XMLGenerator();
     const validResources: ResourceInfo[] = [];
 
-    const processedNames = new Set<string>();
+    const processedNames = new Map<string, number>(); // name -> count for unique naming
 
     for (const res of componentResources) {
         if (res.type === 'component' && res.data) {
             let compNode = extractedNodesMap.get(res.id) || JSON.parse(res.data) as UINode;
             const hasVisuals = compNode.styles.fillType || compNode.styles.strokeSize;
             if (!compNode.children?.length && !hasVisuals) continue;
-            const safeName = sanitizeFileName(res.name);
+            let safeName = sanitizeFileName(res.name);
             
+            // Handle name collision: append numeric suffix for variants
             if (processedNames.has(safeName)) {
-                console.log(`Duplicate component skipped: ${safeName}`);
-                continue;
+                const count = processedNames.get(safeName)!;
+                processedNames.set(safeName, count + 1);
+                safeName = `${safeName}_${count}`;
+            } else {
+                processedNames.set(safeName, 1);
             }
             
             const xmlContent = generator.generateComponentXml(compNode.children || [], buildId, compNode.width, compNode.height, compNode.styles, compNode.extention, compNode.controllers);
             await fs.writeFile(path.join(packagePath, safeName + '.xml'), xmlContent);
             
+            // Update resource name and propagate to all references
+            // 💡 SCALING: Ensure package.xml registers component at 2x size
             res.name = safeName;
+            res.width = Math.round(compNode.width * FGUI_SCALE);
+            res.height = Math.round(compNode.height * FGUI_SCALE);
             validResources.push(res);
-            processedNames.add(safeName);
         }
     }
 
@@ -340,9 +347,11 @@ async function main() {
                 id: `main_${node.id.replace(/:/g, '_')}`,
                 name: fileName,
                 type: 'component',
-                exported: true
+                exported: true,
+                width: Math.round(node.width * FGUI_SCALE),
+                height: Math.round(node.height * FGUI_SCALE)
             });
-            processedNames.add(safeName);
+            processedNames.set(safeName, 1);
         }
     }
 

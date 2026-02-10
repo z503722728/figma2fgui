@@ -22,13 +22,24 @@ export class SubComponentExtractor {
         }
 
         // Phase 2: Analyze and Pre-register Resources
+        const usedNames = new Map<string, number>(); // name -> count for dedup
         for (const [hash, instances] of this._candidateGroups.entries()) {
             if (instances.length === 0) continue;
             const canonical = instances[0];
 
             // 💡 Registering the resource structure early so Phase 3 can find it
             const resId = `comp_` + (this._nextCompId++);
-            const safeName = canonical.name.replace(/\s+/g, '');
+            let safeName = canonical.name.replace(/\s+/g, '');
+            
+            // Handle name collisions: append numeric suffix for variants
+            if (usedNames.has(safeName)) {
+                const count = usedNames.get(safeName)!;
+                usedNames.set(safeName, count + 1);
+                safeName = `${safeName}_${count}`;
+            } else {
+                usedNames.set(safeName, 1);
+            }
+            
             const preRes: ResourceInfo = {
                 id: resId,
                 name: safeName,
