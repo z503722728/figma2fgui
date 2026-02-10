@@ -118,6 +118,15 @@ export class ImagePipeline {
                 return;
             }
 
+            // 💡 asComponent 节点（根组件、已提取的子组件）不应被当作图片整体渲染。
+            // 它们需要递归扫描子节点，让每个子节点独立获取图片资源。
+            // 否则 isVisualLeaf 可能因为节点有 fill 且无直接文本子节点而误判为整体图片，
+            // 导致所有子节点不被扫描、没有 src。
+            if (node.asComponent) {
+                if (node.children) node.children.forEach(visit);
+                return;
+            }
+
             const isVisualLeaf = this.isVisualLeaf(node);
 
             if (isVisualLeaf) {

@@ -110,8 +110,9 @@ export class RawFigmaParser {
         if ((uiNode.type === ObjectType.Component || uiNode.type === ObjectType.Group) && hasComplexFills) {
             const bgNode: UINode = {
                 id: uiNode.id + '_bg',
+                sourceId: node.id, // 💡 使用父帧的真实 Figma ID，否则合成 ID 会导致 SSR API 400 错误
                 name: uiNode.name + '_bg',
-                type: ObjectType.Image, // 强制作为图像导出为 SVG
+                type: ObjectType.Image, // 强制作为图像导出为 SSR 图片
                 x: 0,
                 y: 0,
                 width: uiNode.width,
