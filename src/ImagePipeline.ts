@@ -301,6 +301,14 @@ export class ImagePipeline {
             }
         }
 
+        // Case 3: 💡 Container with mask descendants (alpha mask / clipping effects)
+        // Figma 的 alpha mask + clipsContent 产生的视觉效果无法用独立子元素复现，
+        // 必须由 Figma SSR 整体渲染为一张图片。
+        if (node.children && node.children.length > 0 && this.hasMaskDescendants(node)) {
+            console.log(`🎭 isVisualLeaf: Treating "${node.name}" as atomic unit (contains mask descendants)`);
+            return true;
+        }
+
         return false;
     }
 
@@ -334,6 +342,20 @@ export class ImagePipeline {
             if (!this.allDescendantsAreShapes(child)) return false;
         }
         return true;
+    }
+
+    /**
+     * Recursively checks if any descendant (including invisible ones) has isMask: true.
+     * Containers with mask descendants use Figma alpha masking / clipping effects
+     * that can't be reproduced with individual FGUI elements — must be SSR-rendered as a whole.
+     */
+    private hasMaskDescendants(node: UINode): boolean {
+        if (!node.children) return false;
+        for (const child of node.children) {
+            if (child.customProps?.isMask) return true;
+            if (this.hasMaskDescendants(child)) return true;
+        }
+        return false;
     }
 
     /**

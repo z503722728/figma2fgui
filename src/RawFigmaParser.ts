@@ -86,8 +86,11 @@ export class RawFigmaParser {
             },
             children: [],
             text: node.characters,
-            // 💡 Mask 节点是 Figma 的遮罩裁剪形状，不应作为独立资源导出
-            visible: node.visible !== false && !node.isMask
+            // 💡 过滤不应导出的节点:
+            //   - Figma 设为 visible:false 的节点
+            //   - isMask: 遮罩裁剪形状，用于定义 clipping 区域
+            //   - opacity===0: 完全透明的节点（如组件属性模板文字）
+            visible: node.visible !== false && !node.isMask && node.opacity !== 0
         };
 
         if (uiNode.type === ObjectType.ProgressBar || uiNode.type === ObjectType.Slider) {

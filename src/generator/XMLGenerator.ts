@@ -51,7 +51,17 @@ export class XMLGenerator {
         // Z-ORDER FIX: Figma 解析器按绘制顺序（底→顶）输出子节点。
         // FGUI XML 按顺序渲染（画家算法：先=底，后=顶）。
         // 所以正向迭代，不要反转。
-        nodes.forEach(node => {
+        //
+        // 💡 Button 特殊处理:
+        // 部分 Figma 设计中 BtnBg 层在文字之上（通过混合模式/透明度显示文字），
+        // 但导出为不透明 PNG 后会完全覆盖文字。
+        // FGUI Button 约定: icon(背景) 在底层, title(文字) 在顶层。
+        // 因此对 Button 组件，将有 src 的图像节点提前到文字节点之前。
+        const sortedNodes = (extention === 'Button')
+            ? this.sortButtonChildren(nodes)
+            : nodes;
+
+        sortedNodes.forEach(node => {
             this.generateNodeXml(node, displayList, buildId, context);
         });
 
@@ -164,6 +174,21 @@ export class XMLGenerator {
             attrs.xy = '0,0';
             displayList.ele('graph', attrs);
         }
+    }
+
+    /**
+     * 对 Button 组件的子节点进行 Z-order 排序。
+     * 确保有 src（SSR 背景图）的节点排在前面（底层），
+     * 文本/容器节点排在后面（顶层），符合 FGUI Button 的 icon/title 约定。
+     *
+     * 使用稳定排序，仅将有 src 的节点提前，不改变同类节点之间的相对顺序。
+     */
+    private sortButtonChildren(nodes: UINode[]): UINode[] {
+        return [...nodes].sort((a, b) => {
+            const aHasSrc = a.src ? 0 : 1;
+            const bHasSrc = b.src ? 0 : 1;
+            return aHasSrc - bHasSrc;
+        });
     }
 
     /**

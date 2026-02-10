@@ -86,8 +86,10 @@ export class ContainerHandler implements INodeHandler {
 
         // 5. 递归展平子节点
         if (hasChildren) {
-            // Z-ORDER FIX: 反向迭代
-            [...node.children].reverse().forEach(child => {
+            // Figma children 顺序: children[0]=底层, children[last]=顶层
+            // FGUI displayList 顺序: 先底后顶 (画家算法)
+            // 两者一致，正向迭代即可，不要反转
+            node.children.forEach(child => {
                 const flattenedChild = { ...child };
                 flattenedChild.x = node.x + child.x;
                 flattenedChild.y = node.y + child.y;

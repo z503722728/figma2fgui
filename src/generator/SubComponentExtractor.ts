@@ -123,6 +123,15 @@ export class SubComponentExtractor {
             node.type === ObjectType.List
         );
 
+        // 💡 Containers with mask descendants use alpha masking / clipping effects
+        // that require Figma SSR to render correctly. Don't extract as components.
+        // BUT: Extension types (Button, Label, etc.) must ALWAYS be extracted as FGUI
+        // components, even if they contain mask descendants deep inside (e.g. decorative elements).
+        // The mask sub-elements will be handled by ImagePipeline as SSR images.
+        if (!isExtensionType && this.hasMaskDescendants(node)) {
+            return;
+        }
+
         const hasNestedExtracted = node.children.some(c => c.asComponent);
         const hasVisuals = (node.styles.background || node.styles.backgroundColor || node.styles.border || node.styles.outline);
         
@@ -144,6 +153,20 @@ export class SubComponentExtractor {
             this._candidateGroups.get(hash)!.push(node);
             node.asComponent = true; 
         }
+    }
+
+    /**
+     * Recursively checks if any descendant (including invisible ones) has isMask: true.
+     * Containers with mask descendants use Figma alpha masking / clipping effects
+     * that must be SSR-rendered as a whole, not extracted as sub-components.
+     */
+    private hasMaskDescendants(node: UINode): boolean {
+        if (!node.children) return false;
+        for (const child of node.children) {
+            if (child.customProps?.isMask) return true;
+            if (this.hasMaskDescendants(child)) return true;
+        }
+        return false;
     }
 
     /**
