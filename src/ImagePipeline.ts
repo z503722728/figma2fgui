@@ -3,7 +3,7 @@ import * as path from 'path';
 import { FigmaClient } from './FigmaClient';
 import { UINode, ResourceInfo } from './models/UINode';
 import { ObjectType } from './models/FGUIEnum';
-import { sanitizeFileName, FGUI_SCALE } from './Common';
+import { sanitizeFileName, FGUI_SCALE, getVisualPadding } from './Common';
 
 /**
  * Cache manifest structure for version-aware caching.
@@ -80,12 +80,15 @@ export class ImagePipeline {
 
         this.queue.push({ node, sourceId, fileName, resId, suffix });
 
+        // 计算效果 padding（阴影、模糊、描边溢出），与 PropertyMapper 保持一致
+        const padding = getVisualPadding(node);
+
         return {
             id: resId,
             name: fileName,
             type: 'image',
-            width: Math.round(node.width * ImagePipeline.SCALE),
-            height: Math.round(node.height * ImagePipeline.SCALE),
+            width: Math.round((node.width + padding * 2) * ImagePipeline.SCALE),
+            height: Math.round((node.height + padding * 2) * ImagePipeline.SCALE),
         };
     }
 

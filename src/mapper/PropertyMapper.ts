@@ -13,10 +13,11 @@ export class PropertyMapper {
     public mapAttributes(node: UINode, assignedId?: string): Record<string, string> {
         // Log style keys for debugging if necessary
         const s = node.styles;
-        // 💡 PADDING FIX: Force padding to 0. Since we download images using use_absolute_bounds: true,
-        // the PNG matches the logical node size exactly. We should NOT add visual padding for shadows/strokes
-        // that are excluded from the image anyway.
-        const padding = 0; // getVisualPadding(node);
+        // 💡 PADDING FIX: For SSR-rendered image nodes (those with src), we download with
+        // use_absolute_bounds=false so effects (shadows, blurs, strokes) are included in the PNG.
+        // We need to expand position/size to match the larger actual image.
+        // For non-image nodes (text, graph, etc.), padding stays 0.
+        const padding = node.src ? getVisualPadding(node) : 0;
         
         // 💡 SCALING: Apply global FGUI_SCALE to all spatial coordinates and sizes
         const x = (node.x - padding) * FGUI_SCALE;

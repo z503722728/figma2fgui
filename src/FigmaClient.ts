@@ -53,7 +53,7 @@ export class FigmaClient {
 
     /**
      * 批量获取节点渲染链接
-     * use_absolute_bounds=true 确保渲染边界与设计稿一致（参考 UnityFigmaBridge）
+     * use_absolute_bounds=false 确保渲染包含阴影、模糊等超出逻辑边界的效果
      */
     public async getImageUrls(ids: string[], format: 'png' | 'svg' = 'png') {
         console.log(`🖼️ 正在请求 ${ids.length} 个节点的渲染链接 (format=${format})...`);
@@ -62,7 +62,7 @@ export class FigmaClient {
                 ids: ids.join(','),
                 format: format,
                 scale: FGUI_SCALE,
-                use_absolute_bounds: true
+                use_absolute_bounds: false
             },
             headers: { 'X-Figma-Token': this.token }
         });

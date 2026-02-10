@@ -86,7 +86,8 @@ export class RawFigmaParser {
             },
             children: [],
             text: node.characters,
-            visible: node.visible !== false
+            // 💡 Mask 节点是 Figma 的遮罩裁剪形状，不应作为独立资源导出
+            visible: node.visible !== false && !node.isMask
         };
 
         if (uiNode.type === ObjectType.ProgressBar || uiNode.type === ObjectType.Slider) {
