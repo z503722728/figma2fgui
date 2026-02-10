@@ -1,24 +1,38 @@
 import * as xmlbuilder from 'xmlbuilder';
-import { UINode, ResourceInfo } from '../models/UINode';
+import { UINode, ResourceInfo, GearInfo } from '../models/UINode';
 import { ObjectType } from '../models/FGUIEnum';
 import { PropertyMapper } from '../mapper/PropertyMapper';
 import { FGUI_SCALE } from '../Common';
+import { GeneratorContext } from './handlers/INodeHandler';
+import { HandlerRegistry } from './handlers/HandlerRegistry';
 
 /**
- * XMLGenerator: Responsible for producing valid FGUI XML files.
+ * XMLGenerator: 负责生成有效的 FGUI XML 文件。
+ *
+ * 通过 HandlerRegistry 将不同组件类型的属性填充逻辑
+ * 委托给各自的 Handler，保持主流程精简。
  */
 export class XMLGenerator {
     private _mapper = new PropertyMapper();
+    private _registry = new HandlerRegistry();
 
     /**
-     * Generates component XML from a list of UI nodes.
-     * Recursively processes children if present in the 'nodes' tree.
+     * 从 UI 节点列表生成组件 XML。
+     * 递归处理树中的子节点。
      */
-    public generateComponentXml(nodes: UINode[], buildId: string, width: number = 1440, height: number = 1024, rootStyles?: Record<string, any>, extention?: string, controllers?: any[]): string {
+    public generateComponentXml(
+        nodes: UINode[],
+        buildId: string,
+        width: number = 1440,
+        height: number = 1024,
+        rootStyles?: Record<string, any>,
+        extention?: string,
+        controllers?: any[]
+    ): string {
         const component = xmlbuilder.create('component').att('size', `${width * FGUI_SCALE},${height * FGUI_SCALE}`);
         if (extention) component.att('extention', extention);
 
-        // 💡 写入控制器 (Controllers)
+        // 写入控制器 (Controllers)
         if (controllers && controllers.length > 0) {
             controllers.forEach(c => {
                 component.ele('controller', { name: c.name, pages: c.pages });
@@ -26,37 +40,22 @@ export class XMLGenerator {
         }
 
         const displayList = component.ele('displayList');
-        const context = { idCounter: 0, buildId };
+        const context: GeneratorContext = { idCounter: 0, buildId };
 
-        // Automatic Background Injection
-        // If the component root has background-color or border, we need a graph to render it
+        // 自动背景注入
+        // 如果组件根节点有 background-color 或 border，需要一个 graph 来渲染
         if (rootStyles) {
-            const mapper = new PropertyMapper(); // Using local instance just for easy mapping, or we can manually map
-            // Use a temporary node to map attributes
-            const testNode: any = { styles: rootStyles, type: ObjectType.Graph, width, height, x: 0, y: 0 };
-            const testAttrs = mapper.mapAttributes(testNode, "test");
-            
-            // Check if we have visual properties
-            if (testAttrs.fillColor || (testAttrs.lineColor && testAttrs.lineSize)) {
-                const assignedId = `n${context.idCounter++}`;
-                const attrs = mapper.mapAttributes({ ...testNode, id: assignedId, name: assignedId }, assignedId);
-                // Ensure it fills the component
-                attrs.size = `${width},${height}`;
-                attrs.xy = "0,0";
-                
-                // Add to display list FIRST (bottom layer)
-                displayList.ele('graph', attrs);
-            }
+            this.injectBackground(rootStyles, width, height, displayList, context);
         }
 
-        // 💡 Z-ORDER FIX: Figma parser outputs children in Paint Order (Bottom-to-Top).
-        // FGUI XML renders in order (Painter's Algo: First = Bottom, Last = Top).
-        // So we iterate forward. Do NOT reverse.
+        // Z-ORDER FIX: Figma 解析器按绘制顺序（底→顶）输出子节点。
+        // FGUI XML 按顺序渲染（画家算法：先=底，后=顶）。
+        // 所以正向迭代，不要反转。
         nodes.forEach(node => {
             this.generateNodeXml(node, displayList, buildId, context);
         });
 
-        // 💡 Button 扩展组件需要 <Button/> 标签
+        // Button 扩展组件需要 <Button/> 标签
         if (extention === 'Button') {
             component.ele('Button');
         }
@@ -65,197 +64,110 @@ export class XMLGenerator {
     }
 
     /**
-     * Generates XML for a single node and appends it to the parent XML element.
+     * 生成单个节点的 XML 并附加到父 XML 元素。
+     *
+     * 核心编排流程:
+     *  1. 可见性检查
+     *  2. 查找对应 Handler
+     *  3. 如果 Handler 实现了 handleNode，尝试完全接管
+     *  4. 否则走默认流程：基础属性映射 → 类型特定属性填充 → 创建元素 → Override → Gear
      */
-    private generateNodeXml(node: UINode, parentEle: any, buildId: string, context: { idCounter: number }) {
+    private generateNodeXml(node: UINode, parentEle: any, buildId: string, context: GeneratorContext): void {
         if (node.visible === false) return;
-        let eleName = 'graph';
 
-        // Check if this node is a placeholder for an extracted component
-        if (node.asComponent && node.src) {
-            const assignedId = `n${context.idCounter++}`;
-            const attributes = this._mapper.mapAttributes(node, assignedId);
-            
-            eleName = 'component';
-            attributes.src = node.src;
-            if (node.fileName) attributes.fileName = node.fileName;
-            
-            // Clear other unrelated attributes
-            delete attributes.type;
-            delete attributes.fillColor;
+        const handler = this._registry.getHandler(node);
 
-            // 💡 写入实例状态 (Controller & Page)
-            if (node.overrides && node.overrides.page !== undefined) {
-                attributes.controller = (node.type === ObjectType.Button) ? "button" : "state";
-                attributes.page = node.overrides.page;
-            }
-
-            const compEle = parentEle.ele(eleName, attributes);
-            
-            // 💡 写入属性覆盖 (Overrides)
-            if (node.overrides) {
-                // 如果是按钮类组件，使用 <Button> 标签覆盖
-                if (node.type === ObjectType.Button) {
-                    const btnAttr: any = {};
-                    if (node.overrides.title) btnAttr.title = node.overrides.title;
-                    if (node.overrides.icon) {
-                        btnAttr.icon = `ui://${buildId}${node.overrides.icon}`;
-                    }
-                    compEle.ele('Button', btnAttr);
-                } else if (node.type === ObjectType.ProgressBar) {
-                    const barAttr: any = {};
-                    if (node.overrides.value !== undefined) barAttr.value = node.overrides.value;
-                    if (node.overrides.max !== undefined) barAttr.max = node.overrides.max;
-                    compEle.ele('ProgressBar', barAttr);
-                } else if (node.type === ObjectType.Slider) {
-                    const sliderAttr: any = {};
-                    if (node.overrides.value !== undefined) sliderAttr.value = node.overrides.value;
-                    if (node.overrides.max !== undefined) sliderAttr.max = node.overrides.max;
-                    compEle.ele('Slider', sliderAttr);
-                } else if (node.type === ObjectType.ComboBox) {
-                    const comboAttr: any = {};
-                    if (node.overrides.title) comboAttr.title = node.overrides.title;
-                    compEle.ele('ComboBox', comboAttr);
-                } else {
-                    // 通用自定义属性覆盖
-                    const customEle = compEle.ele('Custom');
-                    for (const [key, value] of Object.entries(node.overrides)) {
-                        customEle.att(key, value);
-                    }
-                }
-            }
-            return;
-        } else {
-            // Standard Mapping
-            switch (node.type) {
-                case ObjectType.Text:
-                    eleName = 'text';
-                    break;
-                case ObjectType.Image:
-                    // 💡 如果节点有 multiLooks，使用 loader 以支持 gearIcon 切换
-                    eleName = (node.multiLooks && Object.keys(node.multiLooks).length > 0) ? 'loader' : 'image';
-                    break;
-                case ObjectType.Loader:
-                    eleName = 'loader';
-                    break;
-                case ObjectType.List:
-                    eleName = 'list';
-                    break;
-                case ObjectType.InputText:
-                    eleName = 'text'; 
-                    break;
-                case ObjectType.Component:
-                case ObjectType.Graph:
-                case ObjectType.Group:
-                case ObjectType.Button:
-                case ObjectType.ProgressBar:
-                case ObjectType.Slider:
-                case ObjectType.ComboBox:
-                case ObjectType.Label:
-                    // 💡 If the pipeline assigned an SSR image (src), render as image/loader
-                    // instead of flattening children. This handles pure-shape INSTANCE nodes
-                    // (like BtnBg) that are rendered as single images by SSR.
-                    if (node.src) {
-                        eleName = (node.multiLooks && Object.keys(node.multiLooks).length > 0) ? 'loader' : 'image';
-                        break;
-                    }
-
-                    // If it's a container that wasn't extracted, we flatten its children.
-                    const testAttr = this._mapper.mapAttributes(node, "test");
-                    const hasVisuals = testAttr.fillColor || (testAttr.lineColor && testAttr.lineSize);
-                    const hasChildren = node.children && node.children.length > 0;
-
-                    if (!hasVisuals && !hasChildren) {
-                        return; // Prune empty, style-less containers (e.g. <div></div>)
-                    }
-
-                    if (hasVisuals) {
-                        const assignedId = `n${context.idCounter++}`;
-                        const attributes = this._mapper.mapAttributes(node, assignedId);
-                        const graphEle = parentEle.ele('graph', attributes);
-
-                        // 💡 Recursive Flattened Visual Gear Handling
-                        if (node.gears && node.gears.length > 0) {
-                            node.gears.forEach(g => {
-                                const gearEle = graphEle.ele(g.type, { controller: g.controller });
-                                if (g.pages) gearEle.att('pages', g.pages);
-                            });
-                        }
-                    }
-
-                    if (hasChildren) {
-                        // FGUI is a flat list per component.
-                        // Recursive Flattening: we promote children to the current level, adjusting coordinates.
-                        // 💡 Z-ORDER FIX: Reverse iteration
-                        [...node.children].reverse().forEach(child => {
-                            const flattenedChild = { ...child };
-                            flattenedChild.x = node.x + child.x;
-                            flattenedChild.y = node.y + child.y; 
-                            this.generateNodeXml(flattenedChild, parentEle, buildId, context);
-                        });
-                        return; // Children processed
-                    }
-                    return; 
-            }
+        // 尝试由 Handler 完全接管生成流程
+        // 用于 ContainerHandler（子节点展平）和 ComponentRefHandler（组件引用）
+        if (handler.handleNode) {
+            const handled = handler.handleNode(
+                node, parentEle, buildId, context,
+                this._mapper,
+                (n, p, b, c) => this.generateNodeXml(n, p, b, c)
+            );
+            if (handled) return;
         }
 
+        // 默认流程
         const assignedId = `n${context.idCounter++}`;
-        const attributes = this._mapper.mapAttributes(node, assignedId);
-        
+        const attrs = this._mapper.mapAttributes(node, assignedId);
 
-        // Apply type-specific post-mapping
-        // 💡 General handling for any node with an assigned SSR image (including pure-shape Containers)
-        if (node.src) {
-            // 💡 If converted to loader (e.g. multiLooks or just loader type), use url
-            // FGUI Format: ui://packageIdresId
-            if ((node.multiLooks && Object.keys(node.multiLooks).length > 0) || node.type === ObjectType.Loader) {
-                attributes.url = `ui://${buildId}${node.src}`;
-            } else {
-                attributes.src = node.src;
-                if (node.fileName) attributes.fileName = node.fileName;
-            }
-            // Cleanup shape attributes that shouldn't be on an image/loader
-            delete attributes.fill;
-            delete attributes.fillColor;
-            delete attributes.lineColor;
-            delete attributes.type; // Remove 'rect' etc.
-        } else if (node.type === ObjectType.InputText) {
-            attributes.input = "true";
+        // 让 Handler 填充类型特定属性
+        handler.populateAttributes(node, attrs, buildId);
+
+        // 创建 XML 元素
+        const eleName = handler.getElementName(node);
+        const nodeEle = parentEle.ele(eleName, attrs);
+
+        // 写入 Override（如果有）
+        if (handler.writeOverrides) {
+            handler.writeOverrides(node, nodeEle, buildId);
         }
 
-        const nodeEle = parentEle.ele(eleName, attributes);
+        // 统一的 Gear 写入
+        this.writeGears(node, nodeEle, buildId);
+    }
 
-        // 💡 写入齿轮 (Gears)
-        if (node.gears && node.gears.length > 0) {
-            node.gears.forEach(g => {
-                const gearEle = nodeEle.ele(g.type, { controller: g.controller });
-                if (g.pages) gearEle.att('pages', g.pages);
-                
-                if (g.values) {
-                    let finalValues = g.values;
-                    // 💡 gearIcon 需要完整的 ui://packageId 前缀才能找到资源
-                    // FGUI 格式为 ui://packageIdresId (无斜杠分隔)
-                    if (g.type === 'gearIcon') {
-                        const valuesArr = g.values.split('|');
-                        finalValues = valuesArr.map(v => {
-                            if (v.includes('ui://')) return v;
-                            return `ui://${buildId}${v}`;
-                        }).join('|');
-                        
-                        // 💡 FGUI 需要 pages 属性才能正确显示 gearIcon
-                        const pageIndices = valuesArr.map((_, i) => i).join(',');
-                        gearEle.att('pages', pageIndices);
-                    }
-                    gearEle.att('values', finalValues);
+    /**
+     * 统一的齿轮 (Gear) 写入逻辑。
+     * 所有节点共用，避免重复代码。
+     */
+    private writeGears(node: UINode, element: any, buildId: string): void {
+        if (!node.gears || node.gears.length === 0) return;
+
+        node.gears.forEach((g: GearInfo) => {
+            const gearEle = element.ele(g.type, { controller: g.controller });
+            if (g.pages) gearEle.att('pages', g.pages);
+
+            if (g.values) {
+                let finalValues = g.values;
+
+                // gearIcon 需要完整的 ui://packageId 前缀才能找到资源
+                // FGUI 格式为 ui://packageIdresId (无斜杠分隔)
+                if (g.type === 'gearIcon') {
+                    const valuesArr = g.values.split('|');
+                    finalValues = valuesArr.map(v => {
+                        if (v.includes('ui://')) return v;
+                        return `ui://${buildId}${v}`;
+                    }).join('|');
+
+                    // FGUI 需要 pages 属性才能正确显示 gearIcon
+                    const pageIndices = valuesArr.map((_, i) => i).join(',');
+                    gearEle.att('pages', pageIndices);
                 }
-                
-                if (g.default) gearEle.att('default', g.default);
-            });
+                gearEle.att('values', finalValues);
+            }
+
+            if (g.default) gearEle.att('default', g.default);
+        });
+    }
+
+    /**
+     * 注入组件根背景。
+     * 如果根节点有 fillColor 或 border，生成一个全尺寸的 graph 元素。
+     */
+    private injectBackground(
+        rootStyles: Record<string, any>,
+        width: number,
+        height: number,
+        displayList: any,
+        context: GeneratorContext
+    ): void {
+        const mapper = new PropertyMapper();
+        const testNode: any = { styles: rootStyles, type: ObjectType.Graph, width, height, x: 0, y: 0 };
+        const testAttrs = mapper.mapAttributes(testNode, 'test');
+
+        if (testAttrs.fillColor || (testAttrs.lineColor && testAttrs.lineSize)) {
+            const assignedId = `n${context.idCounter++}`;
+            const attrs = mapper.mapAttributes({ ...testNode, id: assignedId, name: assignedId }, assignedId);
+            attrs.size = `${width},${height}`;
+            attrs.xy = '0,0';
+            displayList.ele('graph', attrs);
         }
     }
 
     /**
-     * Generates package.xml description.
+     * 生成 package.xml 描述。
      */
     public generatePackageXml(resources: ResourceInfo[], buildId: string, packName: string): string {
         const pkgDesc = xmlbuilder.create('packageDescription').att('id', buildId);
@@ -263,14 +175,14 @@ export class XMLGenerator {
 
         resources.forEach(res => {
             if (res.type === 'misc') return;
-            
-            const resAttr: any = { 
-                id: res.id, 
-                name: res.name, 
-                path: res.type === 'image' ? '/img/' : '/', 
-                exported: res.exported ? 'true' : 'false' 
+
+            const resAttr: any = {
+                id: res.id,
+                name: res.name,
+                path: res.type === 'image' ? '/img/' : '/',
+                exported: res.exported ? 'true' : 'false'
             };
-            
+
             if (res.type === 'component' && !res.name.endsWith('.xml')) {
                 resAttr.name = res.name + '.xml';
             }
