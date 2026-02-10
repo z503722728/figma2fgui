@@ -97,6 +97,12 @@ export class SubComponentExtractor {
             this.collectCandidatesRecursive(child);
         }
 
+        // 💡 Pure shape groups should NOT be extracted as components.
+        // They will be rendered as single SSR images by ImagePipeline.
+        if (this.allDescendantsAreShapes(node)) {
+            return;
+        }
+
         const isExtensionType = (
             node.type === ObjectType.Button || 
             node.type === ObjectType.Label || 
@@ -127,6 +133,28 @@ export class SubComponentExtractor {
             this._candidateGroups.get(hash)!.push(node);
             node.asComponent = true; 
         }
+    }
+
+    /**
+     * Checks if ALL descendants of a node are purely graphical shapes.
+     * Used to skip component extraction for pure-shape groups that will
+     * be rendered as single SSR images.
+     */
+    private allDescendantsAreShapes(node: UINode): boolean {
+        if (!node.children || node.children.length === 0) return true;
+        for (const child of node.children) {
+            if (child.type === ObjectType.Text || child.type === ObjectType.RichText || child.type === ObjectType.InputText) {
+                return false;
+            }
+            if (child.type === ObjectType.Button || child.type === ObjectType.Label ||
+                child.type === ObjectType.ProgressBar || child.type === ObjectType.Slider ||
+                child.type === ObjectType.ComboBox || child.type === ObjectType.List) {
+                return false;
+            }
+            if (child.type === ObjectType.Image || child.type === ObjectType.Graph) continue;
+            if (!this.allDescendantsAreShapes(child)) return false;
+        }
+        return true;
     }
 
     private transformTreeRecursive(node: UINode): void {
@@ -176,42 +204,26 @@ export class SubComponentExtractor {
     private analyzeMultiLooks(canonical: UINode, instances: UINode[]) {
         if (instances.length <= 1) return;
 
-        const walkAndCompare = (can: UINode, path: number[]) => {
-            const variantNodes = instances.map(inst => {
-                let curr = inst;
-                for (const idx of path) {
-                    if (curr.children && curr.children[idx]) curr = curr.children[idx];
-                    else return null;
-                }
-                return curr;
-            }).filter(v => v !== null) as UINode[];
+        // 💡 SSR Strategy: Instead of diffing styles and re-rendering locally,
+        // we record each instance's sourceId so the ImagePipeline can request
+        // separate SSR renders for each visual state.
+        instances.forEach((inst) => {
+            const pageId = this.extractInstanceActiveState(inst);
+            if (pageId === 0) return; // Skip "normal" state (canonical is normal)
 
-            variantNodes.forEach(variant => {
-                const pageId = this.extractInstanceActiveState(instances[variantNodes.indexOf(variant)] || variant);
-                if (pageId === 0) return;
+            // Record the instance's sourceId for this state
+            canonical.multiLooks = canonical.multiLooks || {};
+            canonical.multiLooks[pageId] = { sourceId: inst.sourceId || inst.id };
 
-                const diff = this.computeStyleDiff(can, variant);
-                if (Object.keys(diff).length > 0) {
-                    can.multiLooks = can.multiLooks || {};
-                    can.multiLooks[pageId] = can.multiLooks[pageId] || {};
-                    Object.assign(can.multiLooks[pageId], diff);
-                    
-                    can.gears = can.gears || [];
-                    if (!can.gears.find(g => g.type === 'gearIcon')) {
-                        can.gears.push({
-                            type: 'gearIcon',
-                            controller: (canonical.extention === 'Button' || canonical.type === ObjectType.Button) ? 'button' : 'state'
-                        });
-                    }
-                }
-            });
-
-            if (can.children) {
-                can.children.forEach((c, i) => walkAndCompare(c, [...path, i]));
+            // Ensure gearIcon gear exists
+            canonical.gears = canonical.gears || [];
+            if (!canonical.gears.find(g => g.type === 'gearIcon')) {
+                canonical.gears.push({
+                    type: 'gearIcon',
+                    controller: (canonical.extention === 'Button' || canonical.type === ObjectType.Button) ? 'button' : 'state'
+                });
             }
-        };
-
-        walkAndCompare(canonical, []);
+        });
     }
 
     private computeStyleDiff(node1: UINode, node2: UINode): any {

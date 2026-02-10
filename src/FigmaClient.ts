@@ -40,15 +40,28 @@ export class FigmaClient {
     }
 
     /**
+     * 获取文件版本号（用于缓存失效判断）
+     */
+    public async getFileVersion(): Promise<string> {
+        const response = await axios.get(`${this.baseUrl}/files/${this.fileKey}`, {
+            params: { depth: 1 },  // 最浅层级，只获取元数据
+            headers: { 'X-Figma-Token': this.token }
+        });
+        return response.data.version || response.data.lastModified || 'unknown';
+    }
+
+    /**
      * 批量获取节点渲染链接
+     * use_absolute_bounds=true 确保渲染边界与设计稿一致（参考 UnityFigmaBridge）
      */
     public async getImageUrls(ids: string[], format: 'png' | 'svg' = 'png') {
-        console.log(`🖼️ 正在请求 ${ids.length} 个节点的渲染链接...`);
+        console.log(`🖼️ 正在请求 ${ids.length} 个节点的渲染链接 (format=${format})...`);
         const response = await axios.get(`${this.baseUrl}/images/${this.fileKey}`, {
             params: {
                 ids: ids.join(','),
                 format: format,
-                scale: 2 // 2倍图保证清晰度
+                scale: 2,
+                use_absolute_bounds: true
             },
             headers: { 'X-Figma-Token': this.token }
         });
@@ -56,10 +69,13 @@ export class FigmaClient {
     }
 
     /**
-     * 下载图片到本地
+     * 下载图片到本地（带超时保护）
      */
     public async downloadImage(url: string, destPath: string) {
-        const response = await axios.get(url, { responseType: 'arraybuffer' });
+        const response = await axios.get(url, {
+            responseType: 'arraybuffer',
+            timeout: 30000  // 30s timeout
+        });
         await fs.writeFile(destPath, response.data);
     }
 }
