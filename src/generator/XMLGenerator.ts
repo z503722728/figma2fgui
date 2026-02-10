@@ -45,7 +45,7 @@ export class XMLGenerator {
         // 自动背景注入
         // 如果组件根节点有 background-color 或 border，需要一个 graph 来渲染
         if (rootStyles) {
-            this.injectBackground(rootStyles, width, height, displayList, context);
+            this.injectBackground(rootStyles, width * FGUI_SCALE, height * FGUI_SCALE, displayList, context);
         }
 
         // Z-ORDER FIX: Figma 解析器按绘制顺序（底→顶）输出子节点。

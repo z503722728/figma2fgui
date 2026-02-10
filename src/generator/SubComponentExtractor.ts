@@ -93,7 +93,20 @@ export class SubComponentExtractor {
             if (cleanNode.multiLooks && cleanNode.children) {
                 const iconChild = cleanNode.children.find(c => c.name === 'icon');
                 if (iconChild) {
-                    iconChild.multiLooks = cleanNode.multiLooks;
+                    // 💡 将 multiLooks 的 sourceId 从组件实例根节点解析到对应的 icon 子节点。
+                    // analyzeMultiLooks 存储的是 INSTANCE 根的 sourceId，SSR 会渲染整个按钮(含文字)。
+                    // 通过 index 匹配，找到变体实例内与 icon 对应的子节点(如 Background RECTANGLE)。
+                    const iconIdx = cleanNode.children.indexOf(iconChild);
+                    const resolvedLooks: Record<string, any> = {};
+                    for (const [pid, look] of Object.entries(cleanNode.multiLooks as Record<string, any>)) {
+                        const variantChild = look.instanceChildren?.[iconIdx];
+                        resolvedLooks[pid] = {
+                            sourceId: variantChild
+                                ? (variantChild.sourceId || variantChild.id)
+                                : look.sourceId
+                        };
+                    }
+                    iconChild.multiLooks = resolvedLooks;
                     // 将 gearIcon 类型的 gear 移到 icon 子节点
                     const gearIcons = (cleanNode.gears || []).filter(g => g.type === 'gearIcon');
                     if (gearIcons.length > 0) {
@@ -308,7 +321,10 @@ export class SubComponentExtractor {
 
                 // Record multiLook variant
                 canonical.multiLooks = canonical.multiLooks || {};
-                canonical.multiLooks[pageId] = { sourceId: group[0].sourceId || group[0].id };
+                canonical.multiLooks[pageId] = {
+                    sourceId: group[0].sourceId || group[0].id,
+                    instanceChildren: group[0].children, // 💡 保留变体实例子节点，用于后续解析 icon 子节点的 sourceId
+                };
 
                 // 标记该组所有实例的 pageId
                 group.forEach(inst => { inst._variantPageId = pageId; });
@@ -331,7 +347,10 @@ export class SubComponentExtractor {
                 if (pageId === 0) return; // Skip "normal" state (canonical is normal)
 
                 canonical.multiLooks = canonical.multiLooks || {};
-                canonical.multiLooks[pageId] = { sourceId: inst.sourceId || inst.id };
+                canonical.multiLooks[pageId] = {
+                    sourceId: inst.sourceId || inst.id,
+                    instanceChildren: inst.children, // 💡 保留变体实例子节点
+                };
 
                 canonical.gears = canonical.gears || [];
                 if (!canonical.gears.find(g => g.type === 'gearIcon')) {

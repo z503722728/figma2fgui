@@ -107,7 +107,10 @@ export class RawFigmaParser {
         const hasComplexFills = (node.fills && node.fills.some((f: any) => f.visible !== false && f.type !== 'SOLID')) || 
             (node.background && node.background.some((f: any) => f.visible !== false && f.type !== 'SOLID'));
 
-        if ((uiNode.type === ObjectType.Component || uiNode.type === ObjectType.Group) && hasComplexFills) {
+        // 💡 仅为非根容器创建 _bg 虚拟节点。
+        // 根节点的 _bg 使用父帧 sourceId 做 SSR → 渲染出整个帧(含子节点)，导致多余的全屏层。
+        // 根节点的背景由 XMLGenerator.injectBackground 以纯色 graph 降级处理。
+        if ((uiNode.type === ObjectType.Component || uiNode.type === ObjectType.Group) && hasComplexFills && !isRoot) {
             const bgNode: UINode = {
                 id: uiNode.id + '_bg',
                 sourceId: node.id, // 💡 使用父帧的真实 Figma ID，否则合成 ID 会导致 SSR API 400 错误

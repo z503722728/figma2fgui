@@ -181,12 +181,23 @@ export class ImagePipeline {
         // Update gearIcon values
         const gear = node.gears?.find(g => g.type === 'gearIcon');
         if (gear) {
-            const maxPage = Math.max(...pageIds, 3);
-            const values: string[] = [];
-            for (let p = 0; p <= maxPage; p++) {
-                values.push(lookResMap[p] || baseResId);
+            // 💡 Button 控制器页映射: 0=up, 1=down, 2=over, 3=selectedOver
+            // 对于 Button，所有视觉变体应统一映射到 down(1)，
+            // 页 0-2 (up/down/over) 全部使用基础图标。
+            const isButton = gear.controller === 'button';
+
+            if (isButton) {
+                // 取第一个非默认变体作为 down 图标
+                const variantResId = pageIds.map(p => lookResMap[p]).find(r => r && r !== baseResId) || baseResId;
+                gear.values = [baseResId, variantResId, baseResId, baseResId].join('|');
+            } else {
+                const maxPage = Math.max(...pageIds, 3);
+                const values: string[] = [];
+                for (let p = 0; p <= maxPage; p++) {
+                    values.push(lookResMap[p] || baseResId);
+                }
+                gear.values = values.join('|');
             }
-            gear.values = values.join('|');
         }
     }
 
