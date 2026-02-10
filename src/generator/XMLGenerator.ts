@@ -178,16 +178,22 @@ export class XMLGenerator {
 
     /**
      * 对 Button 组件的子节点进行 Z-order 排序。
-     * 确保有 src（SSR 背景图）的节点排在前面（底层），
-     * 文本/容器节点排在后面（顶层），符合 FGUI Button 的 icon/title 约定。
+     * 分三层优先级：
+     *   0 = 背景节点 (名称含 bg/background) → 最底层
+     *   1 = 其他 SSR 图片节点 (有 src) → 中间层
+     *   2 = 文本/普通节点 (无 src) → 最顶层
      *
-     * 使用稳定排序，仅将有 src 的节点提前，不改变同类节点之间的相对顺序。
+     * 使用稳定排序，同优先级节点保持原始 Figma 顺序。
      */
     private sortButtonChildren(nodes: UINode[]): UINode[] {
         return [...nodes].sort((a, b) => {
-            const aHasSrc = a.src ? 0 : 1;
-            const bHasSrc = b.src ? 0 : 1;
-            return aHasSrc - bHasSrc;
+            const getPriority = (n: UINode): number => {
+                const nameLow = n.name.toLowerCase();
+                if (nameLow.includes('bg') || nameLow.includes('background')) return 0;
+                if (n.src) return 1;
+                return 2;
+            };
+            return getPriority(a) - getPriority(b);
         });
     }
 

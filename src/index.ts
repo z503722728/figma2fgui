@@ -113,6 +113,12 @@ async function main() {
     const matchExistingPngs = (nodes: UINode[]) => {
         const scanner = (node: UINode) => {
             if (node.visible === false) return;
+            // 💡 asComponent 节点（根组件、已提取子组件）不应被匹配为图片，
+            // 否则 node.children=[] 会清空子树，导致组件 XML 无法生成。
+            if (node.asComponent) {
+                if (node.children) node.children.forEach(scanner);
+                return;
+            }
             
             const rawId = node.sourceId || node.id;
             const sanitizedId = rawId.replace(/:/g, '_');
@@ -196,24 +202,69 @@ async function main() {
             comp.width = bgNode.width;
             comp.height = bgNode.height;
 
-            // Auto-Center Text
+            // Auto-Center: 文本节点、SSR 图片节点（非背景）越界时居中
             comp.children.forEach(c => {
                 const nameLow = c.name.toLowerCase();
                 const isTitleName = nameLow.startsWith('n') || nameLow.includes('title') || nameLow.includes('text') || nameLow.includes('label');
                 const isTextType = c.type === ObjectType.Text || c.type === ObjectType.RichText || c.type === ObjectType.InputText || c.type === ObjectType.Label;
                 const isContainerType = c.type === ObjectType.Component || c.type === ObjectType.Group || c.type === ObjectType.Graph;
+                // 💡 SSR 渲染节点（有 src，但不是背景）也应参与自动居中。
+                // 典型案例：CyberText 等复杂特效文字被渲染为 SSR 图片后，
+                // 原始 Figma 坐标可能为负值（溢出父容器），需要居中到组件可见区域。
+                const isSsrNonBg = !!c.src && c !== bgNode;
 
-                if (isTextType || (isContainerType && isTitleName)) {
+                if (isTextType || (isContainerType && isTitleName) || isSsrNonBg) {
                     const isOutside = c.y < 0 || c.y + c.height > comp.height;
                     
                     if (isOutside) {
                         const newY = Math.round((comp.height - c.height) / 2);
-                        console.log(`🎯 Auto-centering Text ${c.name}: ${c.y} -> ${newY}`);
+                        console.log(`🎯 Auto-centering ${c.name}: ${c.y} -> ${newY}`);
                         c.y = newY;
                         if (c.x < 0) {
                             c.x = Math.round((comp.width - c.width) / 2);
                         }
                     }
+                }
+            });
+
+            // 💡 Deep auto-center: 递归处理会被 ContainerHandler 展平的容器。
+            // 容器内的子节点（如 SSR 图片、文本）的最终坐标 = 容器偏移 + 子节点相对坐标，
+            // 如果超出组件边界则居中。这解决了 Figma 中子元素溢出容器（clipsContent）
+            // 在展平后坐标变为负值的问题。
+            const deepAutoCenter = (container: UINode, accX: number, accY: number) => {
+                if (!container.children) return;
+                for (const child of container.children) {
+                    if (child.visible === false) continue;
+                    
+                    // 如果子节点也是会被展平的容器，继续递归
+                    if (!child.asComponent && !child.src && child.children?.length) {
+                        deepAutoCenter(child, accX + child.x, accY + child.y);
+                        continue;
+                    }
+                    
+                    // 检查展平后的有效坐标是否越界
+                    const effY = accY + child.y;
+                    const isOutsideY = effY < 0 || effY + child.height > comp.height;
+                    
+                    if (isOutsideY) {
+                        const targetY = Math.round((comp.height - child.height) / 2);
+                        console.log(`🎯 Deep auto-center ${child.name}: effY=${effY} -> ${targetY}`);
+                        child.y = targetY - accY;
+                        
+                        const effX = accX + child.x;
+                        if (effX < 0) {
+                            const targetX = Math.round((comp.width - child.width) / 2);
+                            child.x = targetX - accX;
+                        }
+                    }
+                }
+            };
+            
+            // 对会被展平的容器执行深层自动居中
+            comp.children.forEach(c => {
+                if (c.visible === false) return;
+                if (!c.asComponent && !c.src && c.children?.length) {
+                    deepAutoCenter(c, c.x, c.y);
                 }
             });
 

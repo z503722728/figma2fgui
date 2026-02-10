@@ -304,7 +304,11 @@ export class ImagePipeline {
         // Case 3: 💡 Container with mask descendants (alpha mask / clipping effects)
         // Figma 的 alpha mask + clipsContent 产生的视觉效果无法用独立子元素复现，
         // 必须由 Figma SSR 整体渲染为一张图片。
-        if (node.children && node.children.length > 0 && this.hasMaskDescendants(node)) {
+        // 排除 asComponent 节点：根组件和已提取的子组件不应被当作图片，
+        // 它们内部的 mask 子元素会被 ImagePipeline 单独处理。
+        if (node.children && node.children.length > 0
+            && !node.asComponent
+            && this.hasMaskDescendants(node)) {
             console.log(`🎭 isVisualLeaf: Treating "${node.name}" as atomic unit (contains mask descendants)`);
             return true;
         }
