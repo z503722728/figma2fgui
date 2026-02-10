@@ -4,12 +4,12 @@ import * as path from 'path';
 import * as dotenv from 'dotenv';
 import { RawFigmaParser } from './RawFigmaParser';
 import { XMLGenerator } from './generator/XMLGenerator';
-import { FlexLayoutCalculator } from './FlexLayoutCalculator';
+
 import { SubComponentExtractor } from './generator/SubComponentExtractor';
 import { FigmaClient } from './FigmaClient';
 import { ImagePipeline } from './ImagePipeline';
 import { UINode, ResourceInfo } from './models/UINode';
-import { ObjectType } from './models/FGUIEnum';
+
 import { sanitizeFileName, FGUI_SCALE } from './Common';
 
 dotenv.config();
@@ -86,8 +86,11 @@ async function main() {
     console.log(`🌳 Initial root nodes: ${rootNodes.length}`);
 
     // --- 2. 布局计算 ---
-    const calculator = new FlexLayoutCalculator();
-    calculator.calculate(rootNodes);
+    // 💡 不再使用 Yoga 重算布局。Figma 的 relativeTransform 已经是最终计算好的正确坐标。
+    // Yoga 重算会因缺少完整的 Figma 布局语义（layoutPositioning、layoutSizing、
+    // SPACE_BETWEEN 溢出行为等）而产生错误位置，覆盖 Figma 的正确坐标。
+    // const calculator = new FlexLayoutCalculator();
+    // calculator.calculate(rootNodes);
 
     // --- 3. 组件提取 ---
     console.log("🧩 正在执行智能组件提取...");
@@ -169,7 +172,8 @@ async function main() {
     const justifyComponentLayout = (comp: UINode, res?: ResourceInfo) => {
         if (!comp.children || comp.children.length === 0) return;
 
-        // Identify "Background" Node
+        // --- Phase 1: 识别背景节点 ---
+        // FGUI 组件的坐标系以背景左上角为原点，尺寸以背景尺寸为准。
         let bgNode: UINode | undefined;
         let maxArea = 0;
 
@@ -187,6 +191,9 @@ async function main() {
         });
 
         if (bgNode) {
+            // --- Phase 2: 偏移规范化 ---
+            // 将所有子节点的坐标平移，使背景节点位于原点 (0,0)。
+            // 这是 FGUI 的坐标约定，与布局计算无关。
             console.log(`📏 Justifying ${comp.name} based on Background: ${bgNode.name} (${bgNode.width}x${bgNode.height})`);
             
             const offsetX = -bgNode.x;
@@ -202,74 +209,21 @@ async function main() {
             comp.width = bgNode.width;
             comp.height = bgNode.height;
 
-            // Auto-Center: 文本节点、SSR 图片节点（非背景）越界时居中
-            comp.children.forEach(c => {
-                const nameLow = c.name.toLowerCase();
-                const isTitleName = nameLow.startsWith('n') || nameLow.includes('title') || nameLow.includes('text') || nameLow.includes('label');
-                const isTextType = c.type === ObjectType.Text || c.type === ObjectType.RichText || c.type === ObjectType.InputText || c.type === ObjectType.Label;
-                const isContainerType = c.type === ObjectType.Component || c.type === ObjectType.Group || c.type === ObjectType.Graph;
-                // 💡 SSR 渲染节点（有 src，但不是背景）也应参与自动居中。
-                // 典型案例：CyberText 等复杂特效文字被渲染为 SSR 图片后，
-                // 原始 Figma 坐标可能为负值（溢出父容器），需要居中到组件可见区域。
-                const isSsrNonBg = !!c.src && c !== bgNode;
-
-                if (isTextType || (isContainerType && isTitleName) || isSsrNonBg) {
-                    const isOutside = c.y < 0 || c.y + c.height > comp.height;
-                    
-                    if (isOutside) {
-                        const newY = Math.round((comp.height - c.height) / 2);
-                        console.log(`🎯 Auto-centering ${c.name}: ${c.y} -> ${newY}`);
-                        c.y = newY;
-                        if (c.x < 0) {
-                            c.x = Math.round((comp.width - c.width) / 2);
-                        }
-                    }
-                }
-            });
-
-            // 💡 Deep auto-center: 递归处理会被 ContainerHandler 展平的容器。
-            // 容器内的子节点（如 SSR 图片、文本）的最终坐标 = 容器偏移 + 子节点相对坐标，
-            // 如果超出组件边界则居中。这解决了 Figma 中子元素溢出容器（clipsContent）
-            // 在展平后坐标变为负值的问题。
-            const deepAutoCenter = (container: UINode, accX: number, accY: number) => {
-                if (!container.children) return;
-                for (const child of container.children) {
-                    if (child.visible === false) continue;
-                    
-                    // 如果子节点也是会被展平的容器，继续递归
-                    if (!child.asComponent && !child.src && child.children?.length) {
-                        deepAutoCenter(child, accX + child.x, accY + child.y);
-                        continue;
-                    }
-                    
-                    // 检查展平后的有效坐标是否越界
-                    const effY = accY + child.y;
-                    const isOutsideY = effY < 0 || effY + child.height > comp.height;
-                    
-                    if (isOutsideY) {
-                        const targetY = Math.round((comp.height - child.height) / 2);
-                        console.log(`🎯 Deep auto-center ${child.name}: effY=${effY} -> ${targetY}`);
-                        child.y = targetY - accY;
-                        
-                        const effX = accX + child.x;
-                        if (effX < 0) {
-                            const targetX = Math.round((comp.width - child.width) / 2);
-                            child.x = targetX - accX;
-                        }
-                    }
-                }
-            };
-            
-            // 对会被展平的容器执行深层自动居中
+            // --- Phase 3: 安全检查 ---
+            // 不再强制居中，坐标直接使用 Figma relativeTransform 的精确值。
+            // 仅对完全不可见的节点（与组件区域零重叠）输出警告日志，便于排查。
             comp.children.forEach(c => {
                 if (c.visible === false) return;
-                if (!c.asComponent && !c.src && c.children?.length) {
-                    deepAutoCenter(c, c.x, c.y);
+                const overlapX = Math.min(c.x + c.width, comp.width) - Math.max(c.x, 0);
+                const overlapY = Math.min(c.y + c.height, comp.height) - Math.max(c.y, 0);
+                if (overlapX <= 0 || overlapY <= 0) {
+                    console.warn(`⚠️ Node "${c.name}" is completely outside component bounds: xy=(${c.x},${c.y}) size=(${c.width}x${c.height}) in component ${comp.width}x${comp.height}`);
                 }
             });
 
         } else {
-            // Fallback: Standard Normalization
+            // Fallback: 无背景节点时的标准规范化
+            // 将负坐标的子节点整体偏移至可见区域，扩展组件尺寸以容纳所有子节点。
             let minX = 0, minY = 0, maxX = comp.width, maxY = comp.height;
             let hasNegative = false;
             

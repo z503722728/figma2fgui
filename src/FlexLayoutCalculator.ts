@@ -57,11 +57,13 @@ export class FlexLayoutCalculator {
             node.children.forEach((child, index) => {
                 const yogaChild = this.buildYogaTree(child);
                 
-                // 💡 核心逻辑：如果父节点不是 Flex，或者子节点有明确的 left/top，则设为绝对定位
+                // 💡 核心逻辑：判断子节点是否应设为绝对定位
                 const hasPos = child.styles?.left !== undefined || child.styles?.top !== undefined;
+                // 💡 Figma layoutPositioning: "ABSOLUTE" 表示该子节点脱离 flex 流，
+                // 使用 constraints 进行绝对定位（类似 CSS position:absolute）
+                const isAbsolute = child.customProps?.layoutPositioning === 'ABSOLUTE';
                 
-                // Fix: 即使没有 left/top style，如果 RawFigmaParser 已经算好了 x/y，我们也应该使用它们
-                if (!isFlex || hasPos) {
+                if (!isFlex || hasPos || isAbsolute) {
                     yogaChild.setPositionType(Yoga.POSITION_TYPE_ABSOLUTE);
                     
                     const leftVal = child.styles?.left !== undefined ? parseFloat(child.styles.left) : child.x;
@@ -69,6 +71,21 @@ export class FlexLayoutCalculator {
                     
                     if (!isNaN(leftVal)) yogaChild.setPosition(Yoga.EDGE_LEFT, leftVal);
                     if (!isNaN(topVal)) yogaChild.setPosition(Yoga.EDGE_TOP, topVal);
+                    
+                    // 💡 处理 Figma constraints 拉伸定位
+                    // LEFT_RIGHT: 左右各为 0 → 拉伸填充父容器宽度
+                    // TOP_BOTTOM: 上下各为 0 → 拉伸填充父容器高度
+                    if (isAbsolute && child.customProps?.constraints) {
+                        const c = child.customProps.constraints;
+                        if (c.horizontal === 'LEFT_RIGHT') {
+                            yogaChild.setPosition(Yoga.EDGE_LEFT, 0);
+                            yogaChild.setPosition(Yoga.EDGE_RIGHT, 0);
+                        }
+                        if (c.vertical === 'TOP_BOTTOM') {
+                            yogaChild.setPosition(Yoga.EDGE_TOP, 0);
+                            yogaChild.setPosition(Yoga.EDGE_BOTTOM, 0);
+                        }
+                    }
                 }
                 
                 yogaNode.insertChild(yogaChild, index);

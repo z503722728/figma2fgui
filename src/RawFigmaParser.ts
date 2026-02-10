@@ -82,7 +82,10 @@ export class RawFigmaParser {
                 strokeGeometry: node.strokeGeometry,
                 vectorPaths: node.vectorPaths,
                 isMask: node.isMask,
-                maskType: node.maskType
+                maskType: node.maskType,
+                // 💡 布局定位属性：用于 FlexLayoutCalculator 区分 flex 子节点和绝对定位节点
+                layoutPositioning: node.layoutPositioning,   // "ABSOLUTE" | "AUTO" | undefined
+                constraints: node.constraints,               // {vertical: string, horizontal: string}
             },
             children: [],
             text: node.characters,
