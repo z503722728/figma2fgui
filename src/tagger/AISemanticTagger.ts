@@ -9,6 +9,8 @@ export interface NodeSemanticTag {
     node_id: string;
     /** FGUI ObjectType 名称：Button / ProgressBar / Slider / Label / List / Component / ... */
     semantic_type: string;
+    /** AI 推荐的语义化 FGUI 组件名（替换 Frame_24 等机械名称） */
+    fgui_name?: string;
     /** 子节点角色映射：node_id → 标准名称（title / icon / bar / grip / ...） */
     children_roles?: Record<string, string>;
     /** 多状态变体页：page_index → 变体描述 */
@@ -25,28 +27,93 @@ export interface SemanticTagResult {
 }
 
 // ─── Figma 节点精简摘要（发给 AI 的轻量表示） ────────────────────────────────
+//
+// 设计目标：从 3MB 原始 JSON 提炼出 < 8KB 的语义摘要。
+//
+// 过滤策略：
+//   1. 字段白名单：只保留 id/name/type/size/fills_summary/has_text/has_stroke
+//      删掉 fillGeometry/strokeGeometry/vectorPaths/relativeTransform 等几何数据
+//   2. 深度限制：depth <= MAX_DEPTH（默认 3），超深节点折叠为叶子
+//   3. 宽度限制：每层最多 MAX_CHILDREN 个子节点，超出部分记录 "...N more"
+//   4. 不可见节点跳过（visible===false）
+
+const MAX_DEPTH    = 3;   // 最多展开 3 层
+const MAX_CHILDREN = 15;  // 每层最多 15 个子节点
+const MAX_BYTES    = 12 * 1024; // 单次请求摘要上限 12KB
 
 interface NodeSummary {
     id: string;
     name: string;
-    type: string;        // Figma 原始类型
-    width: number;
-    height: number;
+    /** Figma 原始类型（FRAME / INSTANCE / TEXT / VECTOR 等） */
+    type: string;
+    w: number;
+    h: number;
+    /** 填充类型摘要：solid/gradient/image/none */
+    fill?: string;
+    /** 是否有描边 */
+    stroke?: true;
+    /** 是否含文字（TEXT 直接子节点） */
+    hasText?: true;
+    /** 子节点被截断时剩余数量 */
+    moreSiblings?: number;
     children?: NodeSummary[];
 }
 
+function fillSummary(fills: any[]): string | undefined {
+    if (!fills?.length) return undefined;
+    const visible = fills.filter(f => f.visible !== false);
+    if (!visible.length) return undefined;
+    const types = new Set(visible.map((f: any) => {
+        if (f.type === 'SOLID') return 'solid';
+        if (f.type?.includes('GRADIENT')) return 'gradient';
+        if (f.type === 'IMAGE') return 'image';
+        return 'other';
+    }));
+    return Array.from(types).join('+');
+}
+
 function summarizeNode(node: any, depth = 0): NodeSummary {
-    const summary: NodeSummary = {
-        id: node.id ?? node.sourceId ?? '',
-        name: node.name ?? '',
+    const box = node.absoluteBoundingBox || {};
+    const s: NodeSummary = {
+        id:   node.id ?? '',
+        name: (node.name ?? '').replace(/\s+/g, '_'),
         type: node.type ?? '',
-        width: Math.round(node.width ?? 0),
-        height: Math.round(node.height ?? 0),
+        w:    Math.round(box.width  ?? node.width  ?? 0),
+        h:    Math.round(box.height ?? node.height ?? 0),
     };
-    if (node.children?.length && depth < 3) {
-        summary.children = node.children.map((c: any) => summarizeNode(c, depth + 1));
+
+    const fill = fillSummary(node.fills);
+    if (fill) s.fill = fill;
+    if (node.strokes?.length) s.stroke = true;
+
+    // 标记是否直接含有文字子节点（帮助 AI 判断是否需要 title 角色）
+    if (node.children?.some((c: any) => c.type === 'TEXT')) s.hasText = true;
+
+    if (node.children?.length && depth < MAX_DEPTH) {
+        // 过滤不可见节点
+        const visible = node.children.filter((c: any) => c.visible !== false);
+        const shown = visible.slice(0, MAX_CHILDREN);
+        const rest  = visible.length - shown.length;
+        s.children = shown.map((c: any) => summarizeNode(c, depth + 1));
+        if (rest > 0) s.moreSiblings = rest;
     }
-    return summary;
+
+    return s;
+}
+
+/**
+ * 将节点列表转为精简摘要，并确保总大小不超过 MAX_BYTES。
+ * 超出时自动降低 depth 直到满足限制。
+ */
+function buildSummaries(nodes: any[]): { summaries: NodeSummary[]; depthUsed: number } {
+    for (let d = MAX_DEPTH; d >= 1; d--) {
+        const summaries = nodes.map(n => summarizeNode(n, MAX_DEPTH - d));
+        const json = JSON.stringify(summaries);
+        if (json.length <= MAX_BYTES || d === 1) {
+            return { summaries, depthUsed: d };
+        }
+    }
+    return { summaries: nodes.map(n => summarizeNode(n, MAX_DEPTH)), depthUsed: MAX_DEPTH };
 }
 
 // ─── Skill 文档加载（作为 AI System Prompt 的上下文） ────────────────────────
@@ -121,8 +188,12 @@ export class AISemanticTagger {
     }
 
     /**
-     * 对一批 UINode 进行 AI 语义标注。
-     * 未配置 AI 或标注失败时返回 null，调用方应降级到规则模式。
+     * 对一批原始 Figma 节点进行 AI 语义标注。
+     *
+     * 流程：
+     *  1. buildSummaries() 将原始节点压缩为精简摘要（< 12KB）
+     *  2. 如果节点过多，按 AI_BATCH_SIZE 分批，每批独立请求，结果合并
+     *  3. 失败时降级到规则模式（返回 null）
      */
     async tag(nodes: any[]): Promise<SemanticTagResult | null> {
         if (!this.isAvailable) {
@@ -130,62 +201,94 @@ export class AISemanticTagger {
             return null;
         }
 
-        const summaries = nodes.map(n => summarizeNode(n));
-        const userPrompt = `请分析以下 Figma 节点树，返回语义标注 JSON：\n\n${JSON.stringify(summaries, null, 2)}`;
+        // 1. 构建精简摘要
+        const { summaries, depthUsed } = buildSummaries(nodes);
+        const summaryJson = JSON.stringify(summaries);
+        console.log(`🤖 AI 标注准备：${nodes.length} 个顶层节点，精简摘要 ${(summaryJson.length / 1024).toFixed(1)} KB（depth=${depthUsed}）`);
 
-        try {
-            console.log(`🤖 调用 AI 语义标注 (${this.model})，共 ${nodes.length} 个节点...`);
+        // 2. 按批次大小分批（默认单批，摘要小时不需要分批）
+        const AI_BATCH_SIZE = parseInt(process.env.AI_BATCH_SIZE || '20');
+        const batches: NodeSummary[][] = [];
+        for (let i = 0; i < summaries.length; i += AI_BATCH_SIZE) {
+            batches.push(summaries.slice(i, i + AI_BATCH_SIZE));
+        }
 
-            const resp = await axios.post(
-                `${this.apiBase}/chat/completions`,
-                {
-                    model: this.model,
-                    messages: [
-                        { role: 'system', content: this.systemPrompt },
-                        { role: 'user',   content: userPrompt }
-                    ],
-                    temperature: 0.1,
-                    response_format: { type: 'json_object' }
-                },
-                {
-                    headers: {
-                        'Authorization': `Bearer ${this.apiKey}`,
-                        'Content-Type': 'application/json'
-                    },
-                    timeout: 60000
-                }
-            );
+        console.log(`🤖 调用 AI (${this.model})，共 ${batches.length} 批...`);
 
-            const content = resp.data.choices?.[0]?.message?.content ?? '[]';
-            let parsed: any;
+        const allTags: NodeSemanticTag[] = [];
+
+        for (let i = 0; i < batches.length; i++) {
+            const batch = batches[i];
+            if (batches.length > 1) console.log(`   批次 ${i + 1}/${batches.length}，${batch.length} 个节点...`);
+
+            const userPrompt = [
+                `请分析以下 Figma 节点树摘要（共 ${batch.length} 个顶层节点），返回语义标注 JSON。`,
+                `字段说明：id=节点ID, name=名称, type=Figma类型, w/h=尺寸, fill=填充类型, stroke=有描边, hasText=含文字子节点`,
+                ``,
+                JSON.stringify(batch, null, 2)
+            ].join('\n');
+
             try {
-                parsed = JSON.parse(content);
-            } catch {
-                // 有些模型返回的是带代码块的字符串
-                const match = content.match(/```json\s*([\s\S]*?)```/);
-                parsed = match ? JSON.parse(match[1]) : [];
+                const tags = await this.callAPI(userPrompt);
+                allTags.push(...tags);
+            } catch (err: any) {
+                console.warn(`⚠️  批次 ${i + 1} 失败，跳过: ${err.message}`);
+                // 单批失败不影响其他批次
             }
+        }
 
-            // 兼容返回 { tags: [...] } 或直接 [...] 两种格式
-            const tags: NodeSemanticTag[] = Array.isArray(parsed)
-                ? parsed
-                : (parsed.tags ?? parsed.result ?? []);
-
-            const decisions = tags.map(t =>
-                `node[${t.node_id}] "${t.semantic_type}"${t.risks?.length ? ` ⚠️ ${t.risks.join('; ')}` : ''}`
-            );
-
-            console.log(`✅ AI 标注完成：${tags.length} 个节点`);
-            if (tags.some(t => t.risks?.length)) {
-                console.warn('⚠️  部分节点存在标注风险，请检查回收 YAML 中的 risks 字段');
-            }
-
-            return { tags, decisions };
-
-        } catch (err: any) {
-            console.warn(`⚠️  AI 标注失败，降级到规则模式: ${err.message}`);
+        if (allTags.length === 0) {
+            console.warn('⚠️  所有批次均失败，降级到规则模式');
             return null;
         }
+
+        const decisions = allTags.map(t =>
+            `node[${t.node_id}] "${t.semantic_type}"${t.risks?.length ? ` ⚠️ ${t.risks.join('; ')}` : ''}`
+        );
+
+        console.log(`✅ AI 标注完成：${allTags.length} 个节点`);
+        if (allTags.some(t => t.risks?.length)) {
+            console.warn('⚠️  部分节点存在标注风险，请检查 handoff.yaml');
+        }
+
+        return { tags: allTags, decisions };
+    }
+
+    /**
+     * 单次 API 请求，返回标注结果数组。
+     */
+    private async callAPI(userPrompt: string): Promise<NodeSemanticTag[]> {
+        const resp = await axios.post(
+            `${this.apiBase}/chat/completions`,
+            {
+                model: this.model,
+                messages: [
+                    { role: 'system', content: this.systemPrompt },
+                    { role: 'user',   content: userPrompt }
+                ],
+                temperature: 0.1,
+                response_format: { type: 'json_object' }
+            },
+            {
+                headers: {
+                    'Authorization': `Bearer ${this.apiKey}`,
+                    'Content-Type': 'application/json'
+                },
+                timeout: 90000
+            }
+        );
+
+        const content = resp.data.choices?.[0]?.message?.content ?? '[]';
+        let parsed: any;
+        try {
+            parsed = JSON.parse(content);
+        } catch {
+            const match = content.match(/```json\s*([\s\S]*?)```/);
+            parsed = match ? JSON.parse(match[1]) : [];
+        }
+
+        // 兼容返回 { tags: [...] } 或直接 [...] 两种格式
+        return Array.isArray(parsed) ? parsed : (parsed.tags ?? parsed.result ?? []);
     }
 
     /**
@@ -202,11 +305,93 @@ export class AISemanticTagger {
                 node.childrenRoles   = tag.children_roles ?? {};
                 node.statePages      = tag.state_pages ?? {};
                 node.semanticRisks   = tag.risks ?? [];
+                // fgui_name：AI 推荐的语义化名称，覆盖 Figma 原始名（如 Frame_24 → col_GoldWide）
+                if (tag.fgui_name) {
+                    node.name = tag.fgui_name;
+                }
             }
             node.children?.forEach(apply);
         };
 
         nodes.forEach(apply);
+    }
+
+    /**
+     * Dry-run 模式：只把精简摘要 + System Prompt 写到磁盘，不调用 AI API。
+     *
+     * 适用场景：直接把摘要内容交给 IDE AI 助手（CodeBuddy / Copilot 等）处理，
+     * 拿到结果后保存为 semantic_tags.json，再跑一次 index.ts 自动读取。
+     *
+     * 输出两个文件：
+     *   {packagePath}/ai_input_summary.json   → 发给 AI 的节点摘要
+     *   {packagePath}/ai_input_prompt.md      → System Prompt + 操作说明
+     *
+     * 返回输出路径，便于 index.ts 打印提示。
+     */
+    async dryRun(nodes: any[], packagePath: string): Promise<string> {
+        const { summaries, depthUsed } = buildSummaries(nodes);
+        const summaryJson = JSON.stringify(summaries, null, 2);
+
+        // 写摘要 JSON
+        const summaryPath = path.join(packagePath, 'ai_input_summary.json');
+        await fs.writeFile(summaryPath, summaryJson, 'utf-8');
+
+        // 写 Prompt 说明文件（供 IDE AI 直接阅读）
+        const promptPath = path.join(packagePath, 'ai_input_prompt.md');
+        const promptContent = [
+            '# Figma → FGUI 语义标注任务',
+            '',
+            '## 操作说明',
+            '',
+            '1. 阅读下方"节点摘要"，分析每个节点的 UI 语义',
+            '2. 按照"输出格式"要求返回 JSON',
+            `3. 将结果保存为 \`${packagePath}/semantic_tags.json\``,
+            '4. 再次运行 `bun run src/index.ts` 自动读取标注结果',
+            '',
+            '## System Prompt（规则上下文）',
+            '',
+            this.systemPrompt,
+            '',
+            '## 节点摘要',
+            '',
+            `> 摘要大小：${(summaryJson.length / 1024).toFixed(1)} KB，depth≤${depthUsed}，共 ${summaries.length} 个顶层节点`,
+            '',
+            '```json',
+            summaryJson,
+            '```',
+        ].join('\n');
+        await fs.writeFile(promptPath, promptContent, 'utf-8');
+
+        return summaryPath;
+    }
+
+    /**
+     * 尝试从磁盘读取手动标注结果文件（semantic_tags.json）。
+     * 文件由 IDE AI 助手生成后手动放入包目录。
+     * 返回 null 表示文件不存在或格式错误。
+     */
+    async loadManualTags(packagePath: string): Promise<SemanticTagResult | null> {
+        const tagsPath = path.join(packagePath, 'semantic_tags.json');
+        if (!await fs.pathExists(tagsPath)) return null;
+
+        try {
+            const raw = await fs.readFile(tagsPath, 'utf-8');
+            const parsed = JSON.parse(raw);
+            const tags: NodeSemanticTag[] = Array.isArray(parsed)
+                ? parsed
+                : (parsed.tags ?? parsed.result ?? []);
+
+            if (tags.length === 0) return null;
+
+            const decisions = tags.map(t =>
+                `node[${t.node_id}] "${t.semantic_type}" [手动标注]`
+            );
+            console.log(`📋 读取手动标注文件: ${tagsPath}（${tags.length} 个节点）`);
+            return { tags, decisions };
+        } catch (e: any) {
+            console.warn(`⚠️  semantic_tags.json 解析失败: ${e.message}`);
+            return null;
+        }
     }
 
     /**

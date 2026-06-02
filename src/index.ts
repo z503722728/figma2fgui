@@ -69,21 +69,53 @@ async function main() {
         process.exit(1);
     }
 
-    // ─── 1.5 AI 语义标注（可选预处理层） ─────────────────────────────────────────
-    // 在 RawFigmaParser 解析前，对原始 Figma 节点树注入语义标签。
-    // AI 失败时静默降级，不中断流程。
+    // ─── 1.5 AI 语义标注（三种模式，优先级从高到低） ───────────────────────────
+    //
+    //  模式 A [手动标注]  packagePath/semantic_tags.json 存在 → 直接读取
+    //  模式 B [API 调用]  AI_API_KEY 已配置且 SKIP_AI_TAGGER≠true → 自动调用
+    //  模式 C [Dry-run]   AI_DRY_RUN=true → 只生成摘要文件，不调用 API
+    //  模式 D [规则模式]  以上均不满足 → 跳过 AI，纯规则处理
+    //
     const tagger = new AISemanticTagger();
     let handoffYaml = '';
+    const topNodes = extractTopNodes(figmaData);
 
-    if (tagger.isAvailable) {
-        // 收集顶层节点供 AI 分析
-        const topNodes = extractTopNodes(figmaData);
-        const tagResult = await tagger.tag(topNodes);
+    // 模式 A：读取已有手动标注
+    let tagResult = await tagger.loadManualTags(packagePath);
+
+    if (tagResult) {
+        tagger.applyTags(topNodes, tagResult);
+        handoffYaml = tagger.buildHandoffYaml(tagResult);
+
+    } else if (process.env.AI_DRY_RUN === 'true') {
+        // 模式 C：Dry-run，生成摘要文件交给 IDE AI 处理
+        await fs.ensureDir(packagePath);
+        const summaryPath = await tagger.dryRun(topNodes, packagePath);
+        console.log('');
+        console.log('📄 [Dry-run] 已生成两个文件：');
+        console.log(`   摘要：${summaryPath}`);
+        console.log(`   提示：${summaryPath.replace('summary.json', 'prompt.md')}`);
+        console.log('');
+        console.log('👉 下一步：');
+        console.log('   1. 用 IDE AI 助手阅读 ai_input_prompt.md');
+        console.log(`   2. 将 AI 返回的 JSON 保存为: ${packagePath}\\semantic_tags.json`);
+        console.log('   3. 再次运行 bun run src/index.ts（不需要设置 AI_DRY_RUN）');
+        console.log('');
+        process.exit(0);
+
+    } else if (tagger.isAvailable) {
+        // 模式 B：自动 API 调用
+        tagResult = await tagger.tag(topNodes);
         if (tagResult) {
             tagger.applyTags(topNodes, tagResult);
             handoffYaml = tagger.buildHandoffYaml(tagResult);
             console.log(`🤖 AI 标注完成，共 ${tagResult.tags.length} 个节点`);
         }
+
+    } else {
+        // 模式 D：纯规则模式
+        console.log('⏭️  AI 标注已跳过，使用规则模式');
+        console.log('   提示：设置 AI_DRY_RUN=true 可生成摘要文件，交给 IDE AI 手动标注');
     }
 
     // ─── 2. 解析 UINode 树 ────────────────────────────────────────────────────────

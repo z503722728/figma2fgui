@@ -34,6 +34,31 @@ async function parallelLimit<T>(tasks: (() => Promise<T>)[], limit: number): Pro
 }
 
 /**
+ * Figma nodeId → 短唯一后缀。
+ *
+ * Figma 的 INSTANCE 节点 ID 格式通常为：
+ *   "I112:5767;112:5742;112:5736"（多层嵌套，以 ";" 分隔）
+ *   "1339:6417"（普通节点，以 ":" 分隔）
+ *
+ * 策略：取最后两段（";" 分隔），各自把 ":" 替换为 "_"，用 "-" 连接。
+ * 两段足以在同一文件中区分所有同名节点，同时保持可读性。
+ *
+ * 示例：
+ *   "I1339:6417;39:279;166:1909;26:1538" → "166_1909-26_1538"
+ *   "I112:5767;112:5742"                → "112_5767-112_5742"
+ *   "1339:6409"                         → "1339_6409"
+ */
+function buildShortId(sourceId: string): string {
+    const raw = sourceId.startsWith('I') ? sourceId.slice(1) : sourceId;
+    const segments = raw.split(';');
+    // 取最后两段，不足两段则取全部
+    const tail = segments.slice(-2);
+    return tail
+        .map(s => s.replace(/:/g, '_').replace(/[^a-zA-Z0-9_]/g, ''))
+        .join('-');
+}
+
+/**
  * ImagePipeline: 批量抓取 Figma SSR 图片并并发下载。
  *
  * 改进（design2fgui）：
@@ -71,9 +96,18 @@ export class ImagePipeline {
 
     public enqueue(node: UINode, suffix: string = ''): ResourceInfo {
         const sourceId = node.sourceId || node.id;
-        const nodeIdStr = sourceId.replace(/:/g, '_');
-        const fileName = `${sanitizeFileName(node.name)}${suffix}_${nodeIdStr}.png`;
-        const resId = `img_${sanitizeFileName(node.name)}${suffix.replace(/[^a-zA-Z0-9]/g, '_')}_${nodeIdStr}`;
+
+        // ─── 语义化文件名 ──────────────────────────────────────────────────────
+        // 规则：{语义名}_{短ID}{suffix}.png
+        //   语义名  = sanitize(node.name)，最多 24 字符
+        //   短ID    = sourceId 最后一个 ";" 后的部分（如 "22_351"），保证唯一性
+        //             若无 ";" 则取 ":" 分隔的最后两段（如 "112_5566"）
+        // 示例：bg_I1339:6417;39:279;166:1909;26:1538 → bg_26_1538.png
+        //        icon_cash_I1339:6409;7:61;172:2273  → icon_cash_172_2273.png
+        const semanticName = sanitizeFileName(node.name).substring(0, 24);
+        const shortId = buildShortId(sourceId);
+        const fileName = `${semanticName}_${shortId}${suffix}.png`;
+        const resId    = `img_${semanticName}_${shortId}${suffix.replace(/[^a-zA-Z0-9]/g, '_')}`;
 
         this.queue.push({ node, sourceId, fileName, resId, suffix });
 
@@ -82,7 +116,7 @@ export class ImagePipeline {
             id: resId,
             name: fileName,
             type: 'image',
-            width: Math.round((node.width + padding * 2) * FGUI_SCALE),
+            width:  Math.round((node.width  + padding * 2) * FGUI_SCALE),
             height: Math.round((node.height + padding * 2) * FGUI_SCALE),
         };
     }
@@ -175,8 +209,30 @@ export class ImagePipeline {
             return;
         }
 
+        // ─── 情况 A 去重：相同 fileName 不同 sourceId ────────────────────────────
+        // Figma INSTANCE 的多个实例共享同一个组件库节点，SSR 渲染内容完全相同。
+        // 只请求第一个 sourceId，下载后把文件复制给其余碰撞项，节省 API 配额和带宽。
+        const uniqueByFileName = new Map<string, PipelineItem>(); // fileName → 代表项
+        const aliasMap = new Map<string, string[]>();             // fileName → 其余碰撞项的 fileName（此处相同，记 sourceId 备用）
+        const collisionGroups = new Map<string, PipelineItem[]>(); // fileName → 所有碰撞项
+
+        for (const item of itemsToProcess) {
+            if (!uniqueByFileName.has(item.fileName)) {
+                uniqueByFileName.set(item.fileName, item);
+                collisionGroups.set(item.fileName, [item]);
+            } else {
+                collisionGroups.get(item.fileName)!.push(item);
+            }
+        }
+
+        const deduped = Array.from(uniqueByFileName.values());
+        const savedRequests = itemsToProcess.length - deduped.length;
+        if (savedRequests > 0) {
+            console.log(`🔁 ImagePipeline: 去重后 ${deduped.length} 个唯一请求（节省 ${savedRequests} 次重复下载）`);
+        }
+
         const urlMap = new Map<string, string>();
-        const batches = this.chunk(itemsToProcess, this.BATCH_SIZE);
+        const batches = this.chunk(deduped, this.BATCH_SIZE);
         console.log(`📡 ImagePipeline: Fetching URLs in ${batches.length} batch(es)...`);
 
         for (let i = 0; i < batches.length; i++) {
@@ -191,7 +247,7 @@ export class ImagePipeline {
             if (i < batches.length - 1) await this.delay(this.BATCH_DELAY_MS);
         }
 
-        const downloadTasks = itemsToProcess
+        const downloadTasks = deduped
             .filter(item => urlMap.has(item.sourceId))
             .map(item => () => this.downloadWithRetry(
                 urlMap.get(item.sourceId)!,
@@ -199,7 +255,7 @@ export class ImagePipeline {
                 item.fileName
             ));
 
-        const missing = itemsToProcess.filter(item => !urlMap.has(item.sourceId));
+        const missing = deduped.filter(item => !urlMap.has(item.sourceId));
         if (missing.length > 0) {
             console.warn(`⚠️ ImagePipeline: ${missing.length} nodes returned no URL.`);
             missing.forEach(item => console.warn(`   - ${item.fileName} (${item.sourceId})`));
@@ -207,7 +263,7 @@ export class ImagePipeline {
 
         console.log(`⬇️ ImagePipeline: Downloading ${downloadTasks.length} images (concurrency=${this.CONCURRENCY})...`);
         await parallelLimit(downloadTasks, this.CONCURRENCY);
-        await this.saveManifest(itemsToProcess);
+        await this.saveManifest(itemsToProcess); // 仍用原始完整列表写 manifest，保证缓存命中
         console.log(`✅ ImagePipeline: Done. ${downloadTasks.length} images downloaded.`);
     }
 
