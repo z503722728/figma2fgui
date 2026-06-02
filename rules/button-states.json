@@ -1,0 +1,15 @@
+{
+  "_comment": "Button 多状态控制器页映射。key = 关键词（节点名或变体名中出现），value = 页索引。",
+  "_fgui_pages": "0=up(默认), 1=down/pressed, 2=over/hover, 3=selected/checked, 4=disabled/grayed",
+
+  "pageMap": {
+    "0": ["up", "normal", "default", "默认", "正常"],
+    "1": ["down", "pressed", "click", "clicked", "按下"],
+    "2": ["over", "hover", "focus", "悬停", "聚焦"],
+    "3": ["selected", "checked", "active", "选中", "激活"],
+    "4": ["disabled", "grayed", "inactive", "禁用", "置灰"]
+  },
+
+  "gearFormat": "{base}|{variant}|{base}|{base}",
+  "_note": "超过2个变体时，需手动扩展 gearFormat 或由 AI 推断完整状态序列"
+}

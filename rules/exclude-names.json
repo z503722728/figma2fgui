@@ -1,0 +1,27 @@
+{
+  "_comment": "排除规则：匹配这些关键词的节点在对应阶段会被跳过处理。",
+
+  "componentExtraction": {
+    "_comment": "这些名称的节点不会被提取为独立子组件",
+    "keywords": ["btntext", "mask_inner", "clip_", "_mask", "clipmask"]
+  },
+
+  "backgroundDetection": {
+    "_comment": "这些名称被 justifyComponentLayout 识别为背景节点（坐标原点）",
+    "keywords": ["bg", "background", "底", "back", "backdrop", "base"]
+  },
+
+  "invisibleFilter": {
+    "_comment": "满足以下条件的节点被标记为不可见并跳过",
+    "conditions": {
+      "visible": false,
+      "isMask": true,
+      "opacityZero": true
+    }
+  },
+
+  "coordZeroThreshold": {
+    "_comment": "绝对值小于此像素值的坐标偏移直接归零（浮点误差修正）",
+    "px": 3.5
+  }
+}

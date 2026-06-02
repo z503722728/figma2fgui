@@ -1,0 +1,33 @@
+{
+  "_comment": "Figma 节点名称关键词 → FGUI ObjectType 映射。按项目覆盖此文件，不改代码。",
+  "_priority": "关键词匹配优先级：从上到下，第一个命中的类型生效。",
+
+  "Button": {
+    "keywords": ["button", "btn", "clickable", "tap", "按钮", "点击"],
+    "exclude": ["checkbox", "radio"]
+  },
+  "ProgressBar": {
+    "keywords": ["progress", "progressbar", "进度条", "loading-bar"],
+    "exclude": ["progressitem"]
+  },
+  "Slider": {
+    "keywords": ["slider", "range", "滑块", "slide"],
+    "exclude": []
+  },
+  "ComboBox": {
+    "keywords": ["combo", "select", "dropdown", "下拉", "combobox"],
+    "exclude": []
+  },
+  "List": {
+    "keywords": ["list", "listview", "scroll", "tree", "列表", "滚动"],
+    "exclude": ["listitem", "list-item", "playlist"]
+  },
+  "Label": {
+    "keywords": ["label", "标签"],
+    "exclude": []
+  },
+  "ScrollPane": {
+    "keywords": ["scrollpane", "scroll-pane", "scrollview"],
+    "exclude": []
+  }
+}

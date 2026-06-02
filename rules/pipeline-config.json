@@ -1,0 +1,33 @@
+{
+  "_comment": "管线运行时参数。按需调整，不动代码。",
+
+  "scale": {
+    "value": 2,
+    "_note": "FGUI 全局缩放倍率。所有坐标、尺寸、字号、圆角、描边均 × scale"
+  },
+
+  "imagePipeline": {
+    "batchSize": 50,
+    "concurrency": 5,
+    "batchDelayMs": 100,
+    "_note": "Figma SSR API 批量请求参数，降低并发可减少限流报错"
+  },
+
+  "loader": {
+    "defaultFillMode": "scaleFree",
+    "availableModes": ["scaleFree", "contain", "cover", "fill", "none"],
+    "_note": "Loader 节点的默认填充模式，可按项目覆盖"
+  },
+
+  "packageId": {
+    "prefix": "d2f",
+    "algorithm": "md5",
+    "length": 5,
+    "_note": "FGUI Package ID = prefix + MD5(figmaNodeId)[0:length]，保证确定性"
+  },
+
+  "componentExtraction": {
+    "minChildrenToExtract": 2,
+    "_note": "子节点数量 > 此值时触发提取候选，与 isExtensionType 为 OR 关系"
+  }
+}

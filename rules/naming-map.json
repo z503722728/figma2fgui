@@ -1,0 +1,31 @@
+{
+  "_comment": "子节点语义角色 → FGUI 标准名称映射。FGUI 扩展组件强制要求特定子节点命名。",
+
+  "title": {
+    "match": ["label", "title", "文本", "数值", "text", "name", "caption", "desc"],
+    "applyTo": ["Button", "Label", "ProgressBar", "Slider", "ComboBox"],
+    "nodeTypes": ["Text"]
+  },
+  "icon": {
+    "match": ["icon", "image", "图标", "img", "avatar", "logo", "thumb"],
+    "applyTo": ["Button", "Label"],
+    "nodeTypes": ["Image", "Graph", "Component"],
+    "convertToLoader": true
+  },
+  "bar": {
+    "match": ["bar", "progress", "进度", "fill", "filled"],
+    "applyTo": ["ProgressBar", "Slider"],
+    "nodeTypes": ["Image", "Graph", "Component"]
+  },
+  "grip": {
+    "match": ["grip", "thumb", "滑块", "handle", "knob"],
+    "applyTo": ["Slider"],
+    "nodeTypes": ["Image", "Graph", "Component"]
+  },
+  "bg": {
+    "match": ["bg", "background", "底", "back", "backdrop"],
+    "applyTo": ["Button", "Label", "ProgressBar", "Slider"],
+    "nodeTypes": ["Image", "Graph", "Component"],
+    "_note": "背景节点不重命名，但用于 justifyComponentLayout 的坐标原点识别"
+  }
+}
