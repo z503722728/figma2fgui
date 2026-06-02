@@ -46,6 +46,12 @@ export interface UINode {
      * 用于 Check Button 的 grip：圆形 + 内嵌图标合并为一张图。
      */
     _mergeWithParent?: boolean;
+    /**
+     * 合并渲染：此节点的 sourceId 应合并到 _mergedInto 主节点一起 SSR。
+     * ImagePipeline 扫描时跳过此节点，用主节点的图片 resId 替代。
+     */
+    _mergedInto?: string;
+    _mergedIntoPrimary?: any;
 
     overrides?: Record<string, any>;
     rotation?: number;

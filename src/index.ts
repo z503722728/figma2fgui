@@ -131,13 +131,36 @@ export async function run(opts: RunOptions): Promise<void> {
         // 扩展组件类型：这些节点应走组件提取流程，不能被当成图片整体处理
         const EXTENSION_TYPES = new Set(['Button', 'Label', 'Slider', 'ProgressBar', 'ComboBox', 'List']);
 
+        const primarySrcForMerge = new Map<string, string>(); // primary nodeId → resId
+
         const scanner = (node: UINode) => {
             if (node.visible === false) return;
             if (node.asComponent) { if (node.children) node.children.forEach(scanner); return; }
 
+            // 💡 _mergedInto：此节点已合并到主节点，复用主节点的 src
+            const mergedInto = (node as any)._mergedInto as string | undefined;
+            if (mergedInto) {
+                const primarySrc = primarySrcForMerge.get(mergedInto);
+                if (primarySrc) {
+                    node.src = primarySrc;
+                    console.log(`🔗 匹配合并渲染: "${node.name}" → 复用 ${primarySrc}`);
+                }
+                // 无论是否找到主节点，都不再单独匹配
+                return;
+            }
+
             // 💡 有 AI 语义标注且是扩展类型 → 不做图片匹配，保留子节点让组件流程处理
             if ((node as any).semanticType && EXTENSION_TYPES.has((node as any).semanticType)) {
                 if (node.children) node.children.forEach(scanner);
+                return;
+            }
+
+            // 💡 AI 标注为 Component → 展开子节点，不整体匹配成图片
+            // 例外：装饰性背景节点（水印/纹理）即使是 Component 也应整体匹配成图片
+            const DECORATIVE_KEYWORDS = ['watermark', '纹理', 'texture', 'pattern', 'bg_watermark'];
+            const isDecorative = DECORATIVE_KEYWORDS.some(k => node.name.toLowerCase().includes(k));
+            if (!isDecorative && (node as any).semanticType === 'Component' && node.children?.length) {
+                node.children.forEach(scanner);
                 return;
             }
 
@@ -166,6 +189,11 @@ export async function run(opts: RunOptions): Promise<void> {
                 node.src = res.id;
                 node.fileName = 'img/' + foundPng;
                 node.children = [];
+                // 记录主节点的 src，供 _mergedInto 节点复用
+                if ((node as any)._mergedNodes?.length) {
+                    primarySrcForMerge.set(node.sourceId || node.id, res.id);
+                    console.log(`🔗 主节点已记录: "${node.name}" sourceId=${node.sourceId || node.id} → ${res.id}`);
+                }
                 return;
             }
             if (node.children) node.children.forEach(scanner);

@@ -98,6 +98,8 @@ export class RawFigmaParser {
             semanticRisks: node.semanticRisks,
             // buttonMode：AI 标注的 Button 工作模式（Check=Toggle/复选，Radio=单选）
             buttonMode: node.buttonMode,
+            // 合并渲染标记
+            _mergedInto: node._mergedInto,
         };
 
         if (uiNode.type === ObjectType.ProgressBar || uiNode.type === ObjectType.Slider) {
@@ -211,14 +213,21 @@ export class RawFigmaParser {
     private mapStyles(node: any): any {
         const styles: any = {};
 
+        // 节点自身整体透明度（Figma opacity 属性）
+        if (node.opacity !== undefined && node.opacity !== 1 && node.opacity > 0) {
+            styles.opacity = node.opacity.toFixed(2);
+        }
+
         if (node.fills && Array.isArray(node.fills)) {
             const visibleFills = node.fills.filter((f: any) => f.visible !== false);
 
             const solidFill = visibleFills.find((f: any) => f.type === 'SOLID');
             if (solidFill) {
                 styles.fillType = 'solid';
-                styles.fillColor = this.figmaColorToHex(solidFill.color);
-                styles.fillOpacity = solidFill.opacity ?? 1;
+                // 把 fill-level opacity 合并进颜色的 alpha 通道（FGUI #AARRGGBB）
+                const fillOpacity = solidFill.opacity ?? 1;
+                styles.fillColor = this.figmaColorToHex(solidFill.color, fillOpacity);
+                styles.fillOpacity = fillOpacity;
             }
 
             const gradientFill = visibleFills.find((f: any) => f.type.includes('GRADIENT'));
@@ -253,9 +262,10 @@ export class RawFigmaParser {
         }
 
         if (node.strokes && node.strokes.length > 0) {
+            const strokeOpacity = node.strokes[0].opacity ?? 1;
             styles.strokeSize = node.strokeWeight || 1;
-            styles.strokeColor = this.figmaColorToHex(node.strokes[0].color);
-            styles.strokeOpacity = node.strokes[0].opacity ?? 1;
+            styles.strokeColor = this.figmaColorToHex(node.strokes[0].color, strokeOpacity);
+            styles.strokeOpacity = strokeOpacity;
         }
 
         if (node.effects && Array.isArray(node.effects)) {
@@ -309,11 +319,19 @@ export class RawFigmaParser {
         }
     }
 
-    private figmaColorToHex(color: any, _opacity: number = 1): string {
+    private figmaColorToHex(color: any, opacity: number = 1): string {
         if (!color) return '#000000';
         const r = Math.round(color.r * 255).toString(16).padStart(2, '0');
         const g = Math.round(color.g * 255).toString(16).padStart(2, '0');
         const b = Math.round(color.b * 255).toString(16).padStart(2, '0');
+        // color.a 是 Figma 颜色自身的 alpha（stop alpha 等），opacity 是 fill 级别的不透明度
+        // FGUI 颜色格式：#AARRGGBB（Alpha 在最前）
+        const alpha = color.a !== undefined ? color.a : 1;
+        const finalAlpha = alpha * opacity;
+        if (finalAlpha < 1) {
+            const a = Math.round(finalAlpha * 255).toString(16).padStart(2, '0');
+            return `#${a}${r}${g}${b}`.toUpperCase();
+        }
         return `#${r}${g}${b}`.toUpperCase();
     }
 }

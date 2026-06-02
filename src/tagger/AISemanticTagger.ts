@@ -18,6 +18,14 @@ export interface NodeSemanticTag {
     button_mode?: 'Common' | 'Check' | 'Radio';
     /** AI 推荐的语义化 FGUI 组件名（替换 Frame_24 等机械名称） */
     fgui_name?: string;
+    /**
+     * 合并渲染：把此节点和 merged_nodes 列出的其他节点一起作为同一张图输出。
+     * 适用场景：背景图层 + 水印/纹理层叠在一起，应合并成一张图避免两次 SSR。
+     * 填写方式：在主节点上列出所有要合并的子节点 ID（包括当前节点自身），
+     *           被合并节点在 children_roles 里标注为 "merge_into_prev"。
+     * 示例：背景色(1:1084) 合并 纹理层(1:1085) → bg_gradient 和 bg_watermark 变为一张图
+     */
+    merged_nodes?: string[];
     /** 子节点角色映射：node_id → 标准名称（title / icon / bar / grip / ...） */
     children_roles?: Record<string, string>;
     /** 多状态变体页：page_index → 变体描述 */
@@ -320,11 +328,38 @@ export class AISemanticTagger {
                 if (tag.fgui_name) {
                     node.name = tag.fgui_name;
                 }
+                // merged_nodes：把列出的节点 ID 标记为要合并到此节点一起渲染
+                if (tag.merged_nodes?.length) {
+                    node._mergedNodes = tag.merged_nodes;
+                }
             }
             node.children?.forEach(apply);
         };
 
         nodes.forEach(apply);
+
+        // 第二遍：对 _mergedNodes 里的节点，找到对应节点并标记 _mergedInto
+        const allNodes = new Map<string, any>();
+        const collectAll = (node: any) => {
+            allNodes.set(node.id ?? node.sourceId, node);
+            node.children?.forEach(collectAll);
+        };
+        nodes.forEach(collectAll);
+
+        for (const tag of result.tags) {
+            if (!tag.merged_nodes?.length) continue;
+            const primaryNode = allNodes.get(tag.node_id);
+            if (!primaryNode) continue;
+            for (const mergedId of tag.merged_nodes) {
+                if (mergedId === tag.node_id) continue; // 跳过自身
+                const mergedNode = allNodes.get(mergedId);
+                if (mergedNode) {
+                    mergedNode._mergedInto = tag.node_id;
+                    mergedNode._mergedIntoPrimary = primaryNode;
+                    console.log(`🔗 合并渲染: "${mergedNode.name}" → "${primaryNode.name}"`);
+                }
+            }
+        }
     }
 
     /**

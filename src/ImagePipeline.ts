@@ -127,16 +127,40 @@ export class ImagePipeline {
     }
 
     public scanAndEnqueue(nodes: UINode[], allResources: ResourceInfo[]): void {
+        // 先收集所有主节点（_mergedInto 的目标）的 src，用于后续复用
+        const primarySrcMap = new Map<string, string>(); // mergedInto nodeId → primary src
+
         const visit = (node: UINode) => {
             if (node.visible === false) return;
             if (node.src) {
                 if (node.multiLooks) this.enqueueMultiLooks(node, node.src, allResources);
+                // 如果这个节点是主节点，记录它的 src 供被合并节点复用
+                if ((node as any)._mergedNodes?.length) {
+                    primarySrcMap.set(node.sourceId || node.id, node.src);
+                }
                 return;
             }
             if (node.asComponent) {
                 if (node.children) node.children.forEach(visit);
                 return;
             }
+
+            // _mergedInto：此节点已被主节点合并渲染，复用主节点的 src（如果已处理）
+            const mergedInto = (node as any)._mergedInto as string | undefined;
+            if (mergedInto) {
+                const primarySrc = primarySrcMap.get(mergedInto);
+                if (primarySrc) {
+                    // 直接复用主节点图片，不再单独下载
+                    node.src = primarySrc;
+                    node.fileName = allResources.find(r => r.id === primarySrc)
+                        ? 'img/' + allResources.find(r => r.id === primarySrc)!.name
+                        : undefined;
+                    console.log(`🔗 复用合并渲染: "${node.name}" → src=${primarySrc}`);
+                    return;
+                }
+                // 主节点还没处理（顺序问题），继续正常处理，后面会在 matchExistingPngs 阶段处理
+            }
+
             // _mergeWithParent: 节点本身连同其所有子节点整体作为一张图 SSR（如 grip=圆+图标）
             const isLeaf = (node as any)._mergeWithParent || this.isVisualLeaf(node);
             if (isLeaf) {
@@ -148,6 +172,10 @@ export class ImagePipeline {
                 // 合并节点：子节点不再单独扫描，清空以防 XMLGenerator 展开
                 if ((node as any)._mergeWithParent && node.children?.length) {
                     node.children = [];
+                }
+                // 记录主节点的 src，供被合并节点复用
+                if ((node as any)._mergedNodes?.length) {
+                    primarySrcMap.set(node.sourceId || node.id, res.id);
                 }
                 return;
             }
@@ -291,13 +319,19 @@ export class ImagePipeline {
         );
         if (!isContainer) return false;
 
+        // 💡 装饰性背景节点（水印/纹理）即使含文字也应整体 SSR
+        // 判断依据：节点名称含 watermark/纹理/texture 等关键词
+        const DECORATIVE_KEYWORDS = ['watermark', '纹理', 'texture', 'pattern', 'bg_watermark'];
+        const nameLow = node.name.toLowerCase();
+        const isDecorative = DECORATIVE_KEYWORDS.some(k => nameLow.includes(k));
+
         const hasVisualProps = !!(
             node.styles?.fillColor || node.styles?.strokeColor ||
             node.styles?.imageFill || (node.styles?.filters && node.styles.filters.length > 0)
         );
         const hasFillPaths = Array.isArray(node.customProps?.fillGeometry) && node.customProps.fillGeometry.length > 0;
 
-        if ((hasVisualProps || hasFillPaths) && !this.hasTextChildren(node)) return true;
+        if ((hasVisualProps || hasFillPaths) && (!this.hasTextChildren(node) || isDecorative)) return true;
 
         if (node.children && node.children.length > 0 && this.allDescendantsAreShapes(node)) {
             // 💡 AI 语义标注为 Slider 的节点即使全为形状也不 SSR（Toggle 开关组件）
@@ -305,6 +339,12 @@ export class ImagePipeline {
                 return false;
             }
             console.log(`🧩 isVisualLeaf: Treating "${node.name}" as atomic unit (all children are shapes)`);
+            return true;
+        }
+
+        // 💡 含文字且是装饰性节点（全文字内容的水印层）→ 整体 SSR
+        if (isDecorative && node.children?.length) {
+            console.log(`🖼️ isVisualLeaf: Decorative node "${node.name}" → force SSR`);
             return true;
         }
 
