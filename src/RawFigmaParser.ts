@@ -96,6 +96,8 @@ export class RawFigmaParser {
             childrenRoles: node.childrenRoles,
             statePages: node.statePages,
             semanticRisks: node.semanticRisks,
+            // buttonMode：AI 标注的 Button 工作模式（Check=Toggle/复选，Radio=单选）
+            buttonMode: node.buttonMode,
         };
 
         if (uiNode.type === ObjectType.ProgressBar || uiNode.type === ObjectType.Slider) {

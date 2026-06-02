@@ -91,22 +91,28 @@ export class SubComponentExtractor {
             }
 
             if (cleanNode.multiLooks && cleanNode.children) {
-                const iconChild = cleanNode.children.find(c => c.name === 'icon');
-                if (iconChild) {
-                    const iconIdx = cleanNode.children.indexOf(iconChild);
+                // Check/Radio Button（Toggle）：颜色变化在 bar 子节点（轨道），
+                // 把 multiLooks 分配给 bar。找不到 bar 时回退到 icon。
+                const isCheckBtn = cleanNode.buttonMode === 'Check' || cleanNode.buttonMode === 'Radio';
+                const variantChild = isCheckBtn
+                    ? (cleanNode.children.find(c => c.name === 'bar') || cleanNode.children.find(c => c.name === 'icon'))
+                    : cleanNode.children.find(c => c.name === 'icon');
+
+                if (variantChild) {
+                    const variantIdx = cleanNode.children.indexOf(variantChild);
                     const resolvedLooks: Record<string, any> = {};
                     for (const [pid, look] of Object.entries(cleanNode.multiLooks as Record<string, any>)) {
-                        const variantChild = look.instanceChildren?.[iconIdx];
+                        const instChild = look.instanceChildren?.[variantIdx];
                         resolvedLooks[pid] = {
-                            sourceId: variantChild
-                                ? (variantChild.sourceId || variantChild.id)
+                            sourceId: instChild
+                                ? (instChild.sourceId || instChild.id)
                                 : look.sourceId
                         };
                     }
-                    iconChild.multiLooks = resolvedLooks;
+                    variantChild.multiLooks = resolvedLooks;
                     const gearIcons = (cleanNode.gears || []).filter(g => g.type === 'gearIcon');
                     if (gearIcons.length > 0) {
-                        iconChild.gears = (iconChild.gears || []).concat(gearIcons);
+                        variantChild.gears = (variantChild.gears || []).concat(gearIcons);
                     }
                     delete cleanNode.multiLooks;
                     cleanNode.gears = (cleanNode.gears || []).filter(g => g.type !== 'gearIcon');
@@ -132,8 +138,9 @@ export class SubComponentExtractor {
             this.collectCandidatesRecursive(child);
         }
 
-        if (this.allDescendantsAreShapes(node)) return;
-
+        // 扩展类型（Button/Label 等）即使子节点全是形状，也必须提取为组件。
+        // 例如 Toggle 开关内部含 Rectangle（轨道）+ Ellipse（滑块），
+        // 虽然全是形状，但需要作为可交互的 Check Button 组件处理。
         const isExtensionType = (
             node.type === ObjectType.Button ||
             node.type === ObjectType.Label ||
@@ -142,6 +149,9 @@ export class SubComponentExtractor {
             node.type === ObjectType.ComboBox ||
             node.type === ObjectType.List
         );
+
+        // 纯形状组：只有非扩展类型才跳过提取（让 SSR 整体渲染）
+        if (!isExtensionType && this.allDescendantsAreShapes(node)) return;
 
         if (!isExtensionType && this.hasMaskDescendants(node)) return;
 
@@ -157,7 +167,12 @@ export class SubComponentExtractor {
         if (isExcludedFromExtraction(node.name)) return;
 
         if (isSignificant) {
-            const hash = this.calculateStructuralHash(node);
+            // Check/Radio Button：忽略颜色差异，用结构哈希合并开/关状态实例
+            const isCheckOrRadio = isExtensionType &&
+                node.type === ObjectType.Button &&
+                (node.buttonMode === 'Check' || node.buttonMode === 'Radio');
+            const hash = this.calculateStructuralHash(node, isCheckOrRadio);
+
             if (!this._candidateGroups.has(hash)) {
                 this._candidateGroups.set(hash, []);
             }
@@ -231,6 +246,56 @@ export class SubComponentExtractor {
     private analyzeMultiLooks(canonical: UINode, instances: UINode[]) {
         if (instances.length <= 1) return;
 
+        // ─── Check / Radio Button 专用：颜色状态合并 ──────────────────────────────
+        // 对于 Check Button（Toggle）：多个实例颜色不同 = off/on 两个状态。
+        // 用 `selected` controller（FGUI Check Button 内置）控制状态切换：
+        //   pageId=0 → off（未选中，默认外观 = canonical）
+        //   pageId=1 → on（已选中，绿色外观 = 另一批实例）
+        // 不使用 `button` controller（那是 over/down/disabled 状态）。
+        if (canonical.buttonMode === 'Check' || canonical.buttonMode === 'Radio') {
+            const fingerprints = instances.map(inst => this.computeVisualFingerprint(inst));
+            const canonicalFP = fingerprints[0];
+            const fpGroups = new Map<string, UINode[]>();
+            instances.forEach((inst, i) => {
+                const fp = fingerprints[i];
+                if (!fpGroups.has(fp)) fpGroups.set(fp, []);
+                fpGroups.get(fp)!.push(inst);
+            });
+
+            if (fpGroups.size > 1) {
+                console.log(`🔘 [CheckButton] "${canonical.name}" 找到 ${fpGroups.size} 种视觉状态，合并为 button controller（4页：up/down/over/selectedOver）`);
+                // pageId 0 = canonical（off，第一批），pageId 1 = on（第二批）
+                let pageId = 1;
+                for (const [fp, group] of fpGroups.entries()) {
+                    if (fp === canonicalFP) {
+                        group.forEach(inst => { inst._variantPageId = 0; });
+                        continue;
+                    }
+                    canonical.multiLooks = canonical.multiLooks || {};
+                    canonical.multiLooks[pageId] = {
+                        sourceId: group[0].sourceId || group[0].id,
+                        instanceChildren: group[0].children,
+                    };
+                    group.forEach(inst => { inst._variantPageId = pageId; });
+                    console.log(`   → pageId=${pageId} (${pageId === 1 ? 'on/selected' : 'variant'}) from "${group[0].name}"`);
+                    pageId++;
+                }
+
+                // Check Button 用 `button` controller（FGUI 内置，4页：up/down/over/selectedOver）
+                // gearIcon values 布局：0=off(up), 1=on(down), 2=off(over), 3=on(selectedOver)
+                // 这样点击后 selected 状态自动切换，loader 跟着换图
+                canonical.gears = canonical.gears || [];
+                if (!canonical.gears.find(g => g.type === 'gearIcon')) {
+                    canonical.gears.push({ type: 'gearIcon', controller: 'button' });
+                }
+                // button controller 由 FGUI 内置，组件声明中不需要额外定义
+                // 移除之前错误添加的 selected controller（如有）
+                canonical.controllers = (canonical.controllers || []).filter((c: any) => c.name !== 'selected');
+            }
+            return;
+        }
+
+        // ─── 普通多外观处理（原有逻辑） ──────────────────────────────────────────
         const fingerprints = instances.map(inst => this.computeVisualFingerprint(inst));
         const canonicalFP = fingerprints[0];
         const fpGroups = new Map<string, UINode[]>();
@@ -326,18 +391,34 @@ export class SubComponentExtractor {
         return overrides;
     }
 
-    private calculateStructuralHash(node: UINode): string {
+    private calculateStructuralHash(node: UINode, ignoreColor = false): string {
         const parts: any[] = [];
-        parts.push(node.type, node.width, node.height);
-        const importantStyles = ['borderRadius', 'border', 'strokeSize', 'shadow', 'fillType'];
-        importantStyles.forEach(k => {
-            if (node.styles[k]) parts.push(k, JSON.stringify(node.styles[k]));
-        });
-        if (node.children && node.children.length > 0) {
-            node.children.forEach(c => parts.push(this.calculateStructuralHash(c)));
+
+        if (!ignoreColor) {
+            // 默认模式：精确哈希（type + size + 关键样式 + 子节点递归）
+            parts.push(node.type, node.width, node.height);
+            const importantStyles = ['borderRadius', 'border', 'strokeSize', 'shadow', 'fillType'];
+            importantStyles.forEach(k => {
+                if (node.styles[k]) parts.push(k, JSON.stringify(node.styles[k]));
+            });
+            if (node.children?.length > 0) {
+                node.children.forEach(c => parts.push(this.calculateStructuralHash(c, false)));
+            }
+        } else {
+            // 结构模式（Check/Radio Button 合并开/关状态实例）：
+            // 只比较「节点类型树」，忽略颜色、尺寸、坐标差异。
+            // 例如 Toggle 开/关状态：bar 宽度不同、颜色不同，但类型树相同（Button → [Image, Image, Frame]）。
+            parts.push(node.type);
+            parts.push(node.children?.length ?? 0); // 只比较子节点数量
+            if (node.children?.length > 0) {
+                node.children.forEach(c => parts.push(this.calculateStructuralHash(c, true)));
+            }
         }
+
         return JSON.stringify(parts);
     }
+
+
 
     private stripParent(node: UINode): UINode {
         const { parent, ...rest } = node;

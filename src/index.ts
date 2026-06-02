@@ -128,9 +128,18 @@ export async function run(opts: RunOptions): Promise<void> {
     }
 
     const matchExistingPngs = (nodes: UINode[]) => {
+        // 扩展组件类型：这些节点应走组件提取流程，不能被当成图片整体处理
+        const EXTENSION_TYPES = new Set(['Button', 'Label', 'Slider', 'ProgressBar', 'ComboBox', 'List']);
+
         const scanner = (node: UINode) => {
             if (node.visible === false) return;
             if (node.asComponent) { if (node.children) node.children.forEach(scanner); return; }
+
+            // 💡 有 AI 语义标注且是扩展类型 → 不做图片匹配，保留子节点让组件流程处理
+            if ((node as any).semanticType && EXTENSION_TYPES.has((node as any).semanticType)) {
+                if (node.children) node.children.forEach(scanner);
+                return;
+            }
 
             const rawId = node.sourceId || node.id;
             const sanitizedId = rawId.replace(/:/g, '_');
@@ -236,7 +245,13 @@ export async function run(opts: RunOptions): Promise<void> {
                 const compRootFn = JSON.parse(res.data) as UINode;
                 extractedNodesMap.set(res.id, compRootFn);
                 const isPureShape = pipeline.isAtomicVisual(compRootFn);
-                if (!isPureShape) {
+                // 💡 扩展类型（Button/Label/Slider 等）即使全是形状也需要扫描子节点，
+                // 让 bar/grip 等子节点各自下载图片，不能整体跳过。
+                const isExtensionComp = [
+                    'Button', 'Label', 'Slider', 'ProgressBar', 'ComboBox', 'List'
+                ].includes(compRootFn.extention ?? '');
+
+                if (!isPureShape || isExtensionComp) {
                     matchExistingPngs([compRootFn]);
                     pipeline.scanAndEnqueue([compRootFn], allResources);
                 } else {
@@ -285,7 +300,8 @@ export async function run(opts: RunOptions): Promise<void> {
             const xmlContent = generator.generateComponentXml(
                 compNode.children || [], buildId,
                 compNode.width, compNode.height,
-                compNode.styles, compNode.extention, compNode.controllers
+                compNode.styles, compNode.extention, compNode.controllers,
+                compNode.buttonMode
             );
             await fs.writeFile(path.join(packagePath, safeName + '.xml'), xmlContent);
             res.name = safeName;
@@ -302,7 +318,8 @@ export async function run(opts: RunOptions): Promise<void> {
         const xmlContent = generator.generateComponentXml(
             node.children || [], buildId,
             node.width, node.height,
-            node.styles, undefined, node.controllers
+            node.styles, undefined, node.controllers,
+            node.buttonMode
         );
         await fs.writeFile(path.join(packagePath, `${safeName}.xml`), xmlContent);
         if (!processedNames.has(safeName)) {

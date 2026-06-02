@@ -139,15 +139,19 @@ export const Rules = {
 /**
  * 匹配节点名 → FGUI ObjectType。
  * 优先级：project-rules.typeKeywords > rules/type-keywords.json
+ *
+ * 匹配前统一把空格转为下划线，使 "Group 4613" 和 "Group_4613" 等价。
  */
 export function matchObjectType(nodeName: string): string | null {
-    const name = nodeName.toLowerCase();
+    // 空格/下划线等价：匹配时统一转小写+下划线
+    const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, '_');
+    const name = normalize(nodeName);
 
     // 1. 动态规则优先
     if (_projectRules?.typeKeywords) {
         for (const [typeName, keywords] of Object.entries(_projectRules.typeKeywords)) {
             if (typeName.startsWith('_')) continue;
-            if (keywords.some(kw => name.includes(kw.toLowerCase()))) {
+            if (keywords.some(kw => name.includes(normalize(kw)))) {
                 return typeName;
             }
         }
@@ -157,9 +161,9 @@ export function matchObjectType(nodeName: string): string | null {
     const map = Rules.typeKeywords();
     for (const [typeName, entry] of Object.entries(map)) {
         if (typeName.startsWith('_')) continue;
-        const excluded = entry.exclude.some(ex => name.includes(ex.toLowerCase()));
+        const excluded = entry.exclude.some(ex => name.includes(normalize(ex)));
         if (excluded) continue;
-        const matched = entry.keywords.some(kw => name.includes(kw.toLowerCase()));
+        const matched = entry.keywords.some(kw => name.includes(normalize(kw)));
         if (matched) return typeName;
     }
     return null;
@@ -186,39 +190,33 @@ export function matchStandardName(
 /**
  * 判断节点名是否应该排除出组件提取。
  * 优先级：project-rules.excludeFromExtraction > rules/exclude-names.json
+ * 匹配时空格/下划线等价。
  */
 export function isExcludedFromExtraction(nodeName: string): boolean {
-    const name = nodeName.toLowerCase();
+    const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, '_');
+    const name = normalize(nodeName);
 
-    // 动态规则优先
     if (_projectRules?.excludeFromExtraction?.length) {
-        if (_projectRules.excludeFromExtraction.some(kw => name.includes(kw.toLowerCase()))) {
-            return true;
-        }
+        if (_projectRules.excludeFromExtraction.some(kw => name.includes(normalize(kw)))) return true;
     }
-
-    // 静态规则兜底
     const { componentExtraction } = Rules.excludes();
-    return componentExtraction.keywords.some(kw => name.includes(kw.toLowerCase()));
+    return componentExtraction.keywords.some(kw => name.includes(normalize(kw)));
 }
 
 /**
  * 判断节点名是否是背景节点。
  * 优先级：project-rules.backgroundNodeNames > rules/exclude-names.json
+ * project-rules 使用精确匹配（等价空格/下划线），静态规则使用包含匹配。
  */
 export function isBackgroundNode(nodeName: string): boolean {
-    const name = nodeName.toLowerCase();
+    const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, '_');
+    const name = normalize(nodeName);
 
-    // 动态规则优先（精确名称匹配）
     if (_projectRules?.backgroundNodeNames?.length) {
-        if (_projectRules.backgroundNodeNames.some(n => name === n.toLowerCase())) {
-            return true;
-        }
+        if (_projectRules.backgroundNodeNames.some(n => name === normalize(n))) return true;
     }
-
-    // 静态规则兜底（关键词包含匹配）
     const { backgroundDetection } = Rules.excludes();
-    return backgroundDetection.keywords.some(kw => name.includes(kw.toLowerCase()));
+    return backgroundDetection.keywords.some(kw => name.includes(normalize(kw)));
 }
 
 /**

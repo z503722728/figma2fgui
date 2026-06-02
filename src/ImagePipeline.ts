@@ -170,10 +170,18 @@ export class ImagePipeline {
         if (gear) {
             const isButton = gear.controller === 'button';
             if (isButton) {
-                const variantResId = pageIds.map(p => lookResMap[p]).find(r => r && r !== baseResId) || baseResId;
-                gear.values = [baseResId, variantResId, baseResId, baseResId].join('|');
+                const onResId  = pageIds.map(p => lookResMap[p]).find(r => r && r !== baseResId) || baseResId;
+                const offResId = baseResId;
+                if (onResId !== offResId) {
+                    // Check Button（off/on 两态）：4页布局 → up=off, down=on, over=off, selectedOver=on
+                    gear.values = [offResId, onResId, offResId, onResId].join('|');
+                } else {
+                    // 普通 Button（只有 hover/press 效果，off=on 同图）
+                    gear.values = [baseResId, baseResId, baseResId, baseResId].join('|');
+                }
             } else {
-                const maxPage = Math.max(...pageIds, 3);
+                // 其他 controller：按实际 pageId 范围生成
+                const maxPage = Math.max(...pageIds);
                 const values: string[] = [];
                 for (let p = 0; p <= maxPage; p++) values.push(lookResMap[p] || baseResId);
                 gear.values = values.join('|');

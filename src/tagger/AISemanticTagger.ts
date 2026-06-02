@@ -9,6 +9,13 @@ export interface NodeSemanticTag {
     node_id: string;
     /** FGUI ObjectType 名称：Button / ProgressBar / Slider / Label / List / Component / ... */
     semantic_type: string;
+    /**
+     * Button 工作模式（仅 semantic_type=Button 时有效）：
+     *   Common  = 普通按钮（默认，不需要填写）
+     *   Check   = 复选/Toggle 开关（可 selected/unselected 切换）
+     *   Radio   = 单选按钮（同组互斥）
+     */
+    button_mode?: 'Common' | 'Check' | 'Radio';
     /** AI 推荐的语义化 FGUI 组件名（替换 Frame_24 等机械名称） */
     fgui_name?: string;
     /** 子节点角色映射：node_id → 标准名称（title / icon / bar / grip / ...） */
@@ -305,7 +312,11 @@ export class AISemanticTagger {
                 node.childrenRoles   = tag.children_roles ?? {};
                 node.statePages      = tag.state_pages ?? {};
                 node.semanticRisks   = tag.risks ?? [];
-                // fgui_name：AI 推荐的语义化名称，覆盖 Figma 原始名（如 Frame_24 → col_GoldWide）
+                // button_mode：Check=Toggle/复选，Radio=单选
+                if (tag.button_mode && tag.button_mode !== 'Common') {
+                    node.buttonMode = tag.button_mode;
+                }
+                // fgui_name：AI 推荐的语义化名称
                 if (tag.fgui_name) {
                     node.name = tag.fgui_name;
                 }

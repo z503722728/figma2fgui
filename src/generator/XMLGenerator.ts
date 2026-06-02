@@ -24,13 +24,39 @@ export class XMLGenerator {
         height: number = 1024,
         rootStyles?: Record<string, any>,
         extention?: string,
-        controllers?: any[]
+        controllers?: any[],
+        buttonMode?: string   // 'Common' | 'Check' | 'Radio'
     ): string {
         const component = xmlbuilder.create('component').att('size', `${width * FGUI_SCALE},${height * FGUI_SCALE}`);
         if (extention) component.att('extention', extention);
 
+        // Button 标签在 displayList 之前（与 FairyGUI 编辑器导出格式一致）
+        if (extention === 'Button') {
+            const btnAttrs: Record<string, string> = {};
+            if (buttonMode && buttonMode !== 'Common') {
+                btnAttrs.mode = buttonMode;
+            }
+            component.ele('Button', Object.keys(btnAttrs).length ? btnAttrs : undefined);
+        }
+
+        // controllers 输出
+        // Check/Radio Button：需要显式声明 button controller（FairyGUI 编辑器格式要求）
+        // 内置页固定为：0=up, 1=down, 2=over, 3=selectedOver
+        const isCheckBtn = (buttonMode === 'Check' || buttonMode === 'Radio');
+        if (isCheckBtn) {
+            // 插入 button controller（若 controllers 里没有则自动补充）
+            const hasBtnCtrl = controllers?.some(c => c.name === 'button');
+            if (!hasBtnCtrl) {
+                component.ele('controller', {
+                    name: 'button',
+                    pages: '0,up,1,down,2,over,3,selectedOver'
+                });
+            }
+        }
         if (controllers && controllers.length > 0) {
-            controllers.forEach(c => component.ele('controller', { name: c.name, pages: c.pages }));
+            controllers
+                .filter(c => !(isCheckBtn && c.name === 'button'))  // 已手动输出的不重复
+                .forEach(c => component.ele('controller', { name: c.name, pages: c.pages }));
         }
 
         const displayList = component.ele('displayList');
@@ -40,8 +66,6 @@ export class XMLGenerator {
 
         const sortedNodes = (extention === 'Button') ? this.sortButtonChildren(nodes) : nodes;
         sortedNodes.forEach(node => this.generateNodeXml(node, displayList, buildId, context));
-
-        if (extention === 'Button') component.ele('Button');
 
         return component.end({ pretty: true });
     }
