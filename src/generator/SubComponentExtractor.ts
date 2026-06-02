@@ -90,9 +90,11 @@ export class SubComponentExtractor {
                 this.applyStandardNaming(cleanNode);
             }
 
+            // ─── 组件级 multiLooks 分发 ──────────────────────────────────────────
+            // Check Button 已在 analyzeMultiLooks 阶段将 multiLooks 下移到各子节点，
+            // cleanNode.multiLooks 此时为空，直接跳过。
+            // 普通 Button / Label 等：multiLooks 在组件级，分发给 icon 或 bar 子节点。
             if (cleanNode.multiLooks && cleanNode.children) {
-                // Check/Radio Button（Toggle）：颜色变化在 bar 子节点（轨道），
-                // 把 multiLooks 分配给 bar。找不到 bar 时回退到 icon。
                 const isCheckBtn = cleanNode.buttonMode === 'Check' || cleanNode.buttonMode === 'Radio';
                 const variantChild = isCheckBtn
                     ? (cleanNode.children.find(c => c.name === 'bar') || cleanNode.children.find(c => c.name === 'icon'))
@@ -246,12 +248,7 @@ export class SubComponentExtractor {
     private analyzeMultiLooks(canonical: UINode, instances: UINode[]) {
         if (instances.length <= 1) return;
 
-        // ─── Check / Radio Button 专用：颜色状态合并 ──────────────────────────────
-        // 对于 Check Button（Toggle）：多个实例颜色不同 = off/on 两个状态。
-        // 用 `selected` controller（FGUI Check Button 内置）控制状态切换：
-        //   pageId=0 → off（未选中，默认外观 = canonical）
-        //   pageId=1 → on（已选中，绿色外观 = 另一批实例）
-        // 不使用 `button` controller（那是 over/down/disabled 状态）。
+        // ─── Check / Radio Button 专用 ────────────────────────────────────────────
         if (canonical.buttonMode === 'Check' || canonical.buttonMode === 'Radio') {
             const fingerprints = instances.map(inst => this.computeVisualFingerprint(inst));
             const canonicalFP = fingerprints[0];
@@ -263,8 +260,10 @@ export class SubComponentExtractor {
             });
 
             if (fpGroups.size > 1) {
-                console.log(`🔘 [CheckButton] "${canonical.name}" 找到 ${fpGroups.size} 种视觉状态，合并为 button controller（4页：up/down/over/selectedOver）`);
-                // pageId 0 = canonical（off，第一批），pageId 1 = on（第二批）
+                console.log(`🔘 [CheckButton] "${canonical.name}" 找到 ${fpGroups.size} 种视觉状态`);
+
+                // 找到 OFF(canonical) 和 ON(另一批) 两组
+                let onInstance: UINode | null = null;
                 let pageId = 1;
                 for (const [fp, group] of fpGroups.entries()) {
                     if (fp === canonicalFP) {
@@ -276,20 +275,78 @@ export class SubComponentExtractor {
                         sourceId: group[0].sourceId || group[0].id,
                         instanceChildren: group[0].children,
                     };
+                    if (pageId === 1) onInstance = group[0];
                     group.forEach(inst => { inst._variantPageId = pageId; });
-                    console.log(`   → pageId=${pageId} (${pageId === 1 ? 'on/selected' : 'variant'}) from "${group[0].name}"`);
+                    console.log(`   → pageId=${pageId} (on) from "${group[0].name}"`);
                     pageId++;
                 }
 
-                // Check Button 用 `button` controller（FGUI 内置，4页：up/down/over/selectedOver）
-                // gearIcon values 布局：0=off(up), 1=on(down), 2=off(over), 3=on(selectedOver)
-                // 这样点击后 selected 状态自动切换，loader 跟着换图
-                canonical.gears = canonical.gears || [];
-                if (!canonical.gears.find(g => g.type === 'gearIcon')) {
-                    canonical.gears.push({ type: 'gearIcon', controller: 'button' });
+                // ─── 逐子节点决策：换图 vs 显隐 ──────────────────────────────────
+                // 对比 OFF（canonical.children）和 ON（onInstance.children）每个子节点：
+                //   位置+尺寸相同 → gearIcon 换图（单张 loader）
+                //   位置或尺寸不同 → gearDisplay 显隐（OFF图pages="0,2"，ON图pages="1,3"）
+                //
+                // 关键：先快照原始子节点列表，splice 插入的 onMirror 不被遍历
+                const offChildren = [...(canonical.children || [])];  // 快照
+                const onChildren  = onInstance?.children || [];
+                const insertions: Array<{ afterIndex: number; node: UINode }> = [];
+
+                for (let i = 0; i < offChildren.length; i++) {
+                    const offChild = offChildren[i];
+                    const onChild  = onChildren[i];
+                    if (!onChild) continue;
+
+                    // grip 节点：有子节点（Ellipse + Frame_62），标记整体合并
+                    if (offChild.name === 'grip' && offChild.children?.length) {
+                        (offChild as any)._mergeWithParent = true;
+                    }
+
+                    const samePos  = offChild.x === onChild.x && offChild.y === onChild.y;
+                    const sameSize = offChild.width === onChild.width && offChild.height === onChild.height;
+
+                    if (samePos && sameSize) {
+                        // 位置+尺寸完全相同 → gearIcon 换图
+                        console.log(`   → child[${i}] "${offChild.name}": 位置尺寸相同 → gearIcon 换图`);
+                        offChild.gears = offChild.gears || [];
+                        if (!offChild.gears.find(g => g.type === 'gearIcon')) {
+                            offChild.gears.push({ type: 'gearIcon', controller: 'button' });
+                        }
+                        offChild.multiLooks = { [1]: { sourceId: onChild.sourceId || onChild.id } };
+                    } else {
+                        // 位置或尺寸不同 → gearDisplay 显隐
+                        console.log(`   → child[${i}] "${offChild.name}": 位置/尺寸不同 → gearDisplay 显隐`);
+                        offChild.gears = offChild.gears || [];
+                        offChild.gears.push({ type: 'gearDisplay', controller: 'button', pages: '0,2' });
+
+                        // ON 镜像节点（用 onChild 的 sourceId 下载图片，用 onChild 的坐标显示）
+                        const onMirror: UINode = {
+                            ...offChild,
+                            id:         offChild.id + '_on',
+                            sourceId:   onChild.sourceId || onChild.id,
+                            name:       offChild.name + '_on',
+                            x:          onChild.x,
+                            y:          onChild.y,
+                            width:      onChild.width,
+                            height:     onChild.height,
+                            children:   [],
+                            multiLooks: undefined,
+                            gears:      [{ type: 'gearDisplay', controller: 'button', pages: '1,3' }],
+                            src:        undefined,
+                            fileName:   undefined,
+                        };
+                        insertions.push({ afterIndex: i, node: onMirror });
+                    }
                 }
-                // button controller 由 FGUI 内置，组件声明中不需要额外定义
-                // 移除之前错误添加的 selected controller（如有）
+
+                // 按倒序插入（保证前面插入不影响后面的索引）
+                for (let k = insertions.length - 1; k >= 0; k--) {
+                    const { afterIndex, node: mirrorNode } = insertions[k];
+                    canonical.children!.splice(afterIndex + 1, 0, mirrorNode);
+                }
+
+                // 清除组件级别的 multiLooks（已下移到子节点）
+                delete canonical.multiLooks;
+                canonical.gears = (canonical.gears || []).filter(g => g.type !== 'gearIcon');
                 canonical.controllers = (canonical.controllers || []).filter((c: any) => c.name !== 'selected');
             }
             return;

@@ -41,6 +41,11 @@ export interface UINode {
     asComponent?: boolean;
     _structuralHash?: string;
     _variantPageId?: number;
+    /**
+     * 标记此节点应与其父节点一起整体 SSR（不单独拆分子节点）。
+     * 用于 Check Button 的 grip：圆形 + 内嵌图标合并为一张图。
+     */
+    _mergeWithParent?: boolean;
 
     overrides?: Record<string, any>;
     rotation?: number;

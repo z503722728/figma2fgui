@@ -5,13 +5,11 @@ import { PropertyMapper } from '../mapper/PropertyMapper';
 import { FGUI_SCALE } from '../Common';
 import { GeneratorContext } from './handlers/INodeHandler';
 import { HandlerRegistry } from './handlers/HandlerRegistry';
-import { Rules, isBackgroundNode } from '../rules/RuleLoader';
 
 /**
  * XMLGenerator: 生成有效的 FGUI XML 文件。
  *
- * 改进（design2fgui）：
- * - sortButtonChildren 的背景节点识别从 rules/exclude-names.json 读取。
+ * Button 组件的特殊逻辑（controller 声明、gears 输出）已下沉到 ButtonHandler。
  */
 export class XMLGenerator {
     private _mapper = new PropertyMapper();
@@ -25,38 +23,16 @@ export class XMLGenerator {
         rootStyles?: Record<string, any>,
         extention?: string,
         controllers?: any[],
-        buttonMode?: string   // 'Common' | 'Check' | 'Radio'
+        buttonMode?: string
     ): string {
         const component = xmlbuilder.create('component').att('size', `${width * FGUI_SCALE},${height * FGUI_SCALE}`);
         if (extention) component.att('extention', extention);
 
-        // Button 标签在 displayList 之前（与 FairyGUI 编辑器导出格式一致）
         if (extention === 'Button') {
-            const btnAttrs: Record<string, string> = {};
-            if (buttonMode && buttonMode !== 'Common') {
-                btnAttrs.mode = buttonMode;
-            }
-            component.ele('Button', Object.keys(btnAttrs).length ? btnAttrs : undefined);
-        }
-
-        // controllers 输出
-        // Check/Radio Button：需要显式声明 button controller（FairyGUI 编辑器格式要求）
-        // 内置页固定为：0=up, 1=down, 2=over, 3=selectedOver
-        const isCheckBtn = (buttonMode === 'Check' || buttonMode === 'Radio');
-        if (isCheckBtn) {
-            // 插入 button controller（若 controllers 里没有则自动补充）
-            const hasBtnCtrl = controllers?.some(c => c.name === 'button');
-            if (!hasBtnCtrl) {
-                component.ele('controller', {
-                    name: 'button',
-                    pages: '0,up,1,down,2,over,3,selectedOver'
-                });
-            }
-        }
-        if (controllers && controllers.length > 0) {
-            controllers
-                .filter(c => !(isCheckBtn && c.name === 'button'))  // 已手动输出的不重复
-                .forEach(c => component.ele('controller', { name: c.name, pages: c.pages }));
+            // Button 前置声明（Button标签 + controller）由 ButtonHandler 统一处理
+            this._registry.getButtonHandler().writeButtonPreamble(component, buttonMode);
+        } else if (controllers && controllers.length > 0) {
+            controllers.forEach(c => component.ele('controller', { name: c.name, pages: c.pages }));
         }
 
         const displayList = component.ele('displayList');
@@ -64,8 +40,7 @@ export class XMLGenerator {
 
         if (rootStyles) this.injectBackground(rootStyles, width * FGUI_SCALE, height * FGUI_SCALE, displayList, context);
 
-        const sortedNodes = (extention === 'Button') ? this.sortButtonChildren(nodes) : nodes;
-        sortedNodes.forEach(node => this.generateNodeXml(node, displayList, buildId, context));
+        nodes.forEach(node => this.generateNodeXml(node, displayList, buildId, context));
 
         return component.end({ pretty: true });
     }
@@ -90,11 +65,21 @@ export class XMLGenerator {
         const nodeEle = parentEle.ele(eleName, attrs);
 
         if (handler.writeOverrides) handler.writeOverrides(node, nodeEle, buildId);
-        this.writeGears(node, nodeEle, buildId);
+
+        // gear 输出：handler 自定义 > ButtonHandler（当节点有 button gear 类型时）> 默认
+        if (handler.writeGears) {
+            handler.writeGears(node, nodeEle, buildId);
+        } else if (node.gears?.some(g => ['gearDisplay', 'gearXY'].includes(g.type))) {
+            // 子节点含 button controller 专用 gear → 用 ButtonHandler 输出
+            this._registry.getButtonHandler().writeGears(node, nodeEle, buildId);
+        } else {
+            this.writeGearsDefault(node, nodeEle, buildId);
+        }
     }
 
-    private writeGears(node: UINode, element: any, buildId: string): void {
-        if (!node.gears || node.gears.length === 0) return;
+    /** 默认 gear 输出（非 Button 节点使用） */
+    private writeGearsDefault(node: UINode, element: any, buildId: string): void {
+        if (!node.gears?.length) return;
         node.gears.forEach((g: GearInfo) => {
             const gearEle = element.ele(g.type, { controller: g.controller });
             if (g.pages) gearEle.att('pages', g.pages);
@@ -125,21 +110,6 @@ export class XMLGenerator {
             attrs.xy = '0,0';
             displayList.ele('graph', attrs);
         }
-    }
-
-    /**
-     * Button 子节点 Z-order 排序。
-     * 背景关键词从 rules/exclude-names.json 读取。
-     */
-    private sortButtonChildren(nodes: UINode[]): UINode[] {
-        return [...nodes].sort((a, b) => {
-            const getPriority = (n: UINode): number => {
-                if (isBackgroundNode(n.name)) return 0;  // 背景层（规则驱动）
-                if (n.src) return 1;                      // 图片层
-                return 2;                                 // 文本/内容层
-            };
-            return getPriority(a) - getPriority(b);
-        });
     }
 
     public generatePackageXml(resources: ResourceInfo[], buildId: string, packName: string): string {

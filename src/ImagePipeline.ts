@@ -137,13 +137,18 @@ export class ImagePipeline {
                 if (node.children) node.children.forEach(visit);
                 return;
             }
-            const isLeaf = this.isVisualLeaf(node);
+            // _mergeWithParent: 节点本身连同其所有子节点整体作为一张图 SSR（如 grip=圆+图标）
+            const isLeaf = (node as any)._mergeWithParent || this.isVisualLeaf(node);
             if (isLeaf) {
                 const res = this.enqueue(node);
                 allResources.push(res);
                 node.src = res.id;
                 node.fileName = 'img/' + res.name;
                 if (node.multiLooks) this.enqueueMultiLooks(node, res.id, allResources);
+                // 合并节点：子节点不再单独扫描，清空以防 XMLGenerator 展开
+                if ((node as any)._mergeWithParent && node.children?.length) {
+                    node.children = [];
+                }
                 return;
             }
             if (node.children) node.children.forEach(visit);

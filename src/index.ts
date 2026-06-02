@@ -218,21 +218,27 @@ export async function run(opts: RunOptions): Promise<void> {
                 }
             });
         } else {
-            let minX = 0, minY = 0, maxX = comp.width, maxY = comp.height;
-            let hasNegative = false;
-            comp.children.forEach(c => {
-                if (c.x < minX) { minX = c.x; hasNegative = true; }
-                if (c.y < minY) { minY = c.y; hasNegative = true; }
-                if (c.x + c.width  > maxX) maxX = c.x + c.width;
-                if (c.y + c.height > maxY) maxY = c.y + c.height;
-            });
-            if (hasNegative) {
-                const offsetX = minX < 0 ? -minX : 0;
-                const offsetY = minY < 0 ? -minY : 0;
-                console.log(`📏 Normalizing ${comp.name}: shift (${offsetX}, ${offsetY})`);
-                comp.children.forEach(c => { c.x += offsetX; c.y += offsetY; });
-                comp.width  = Math.max(comp.width,  maxX + offsetX);
-                comp.height = Math.max(comp.height, maxY + offsetY);
+            // Check/Radio Button（Toggle）：grip 圆形故意溢出轨道，不做负坐标归正，
+            // 保持 Figma 原始相对坐标，只确保组件尺寸不小于本体节点。
+            if (comp.extention === 'Button' && (comp.buttonMode === 'Check' || comp.buttonMode === 'Radio')) {
+                // 不移动子节点，尺寸保持原始
+            } else {
+                let minX = 0, minY = 0, maxX = comp.width, maxY = comp.height;
+                let hasNegative = false;
+                comp.children.forEach(c => {
+                    if (c.x < minX) { minX = c.x; hasNegative = true; }
+                    if (c.y < minY) { minY = c.y; hasNegative = true; }
+                    if (c.x + c.width  > maxX) maxX = c.x + c.width;
+                    if (c.y + c.height > maxY) maxY = c.y + c.height;
+                });
+                if (hasNegative) {
+                    const offsetX = minX < 0 ? -minX : 0;
+                    const offsetY = minY < 0 ? -minY : 0;
+                    console.log(`📏 Normalizing ${comp.name}: shift (${offsetX}, ${offsetY})`);
+                    comp.children.forEach(c => { c.x += offsetX; c.y += offsetY; });
+                    comp.width  = Math.max(comp.width,  maxX + offsetX);
+                    comp.height = Math.max(comp.height, maxY + offsetY);
+                }
             }
         }
 
