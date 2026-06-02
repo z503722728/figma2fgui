@@ -37,9 +37,9 @@ export interface SemanticTagResult {
 //   3. 宽度限制：每层最多 MAX_CHILDREN 个子节点，超出部分记录 "...N more"
 //   4. 不可见节点跳过（visible===false）
 
-const MAX_DEPTH    = 3;   // 最多展开 3 层
-const MAX_CHILDREN = 15;  // 每层最多 15 个子节点
-const MAX_BYTES    = 12 * 1024; // 单次请求摘要上限 12KB
+const MAX_DEPTH    = 5;   // 最多展开 5 层（能看到 Toggle 内部的 Ellipse/Rect）
+const MAX_CHILDREN = 12;  // 每层最多 12 个子节点
+const MAX_BYTES    = 20 * 1024; // 单次请求摘要上限 20KB（模型支持更大上下文）
 
 interface NodeSummary {
     id: string;
@@ -317,18 +317,16 @@ export class AISemanticTagger {
     }
 
     /**
-     * Dry-run 模式：只把精简摘要 + System Prompt 写到磁盘，不调用 AI API。
+     * Dry-run 模式：生成摘要文件供 IDE AI 分析，不调用 API。
      *
-     * 适用场景：直接把摘要内容交给 IDE AI 助手（CodeBuddy / Copilot 等）处理，
-     * 拿到结果后保存为 semantic_tags.json，再跑一次 index.ts 自动读取。
+     * 新增：传入 figmaData 可提取 thumbnailUrl，在 prompt 中嵌入界面截图，
+     * 让 AI 能同时看「图像」和「节点树」双重信息进行语义划分。
      *
-     * 输出两个文件：
-     *   {packagePath}/ai_input_summary.json   → 发给 AI 的节点摘要
-     *   {packagePath}/ai_input_prompt.md      → System Prompt + 操作说明
-     *
-     * 返回输出路径，便于 index.ts 打印提示。
+     * 输出文件：
+     *   {packagePath}/ai_input_summary.json   → 节点摘要（depth≤5）
+     *   {packagePath}/ai_input_prompt.md      → 完整 Prompt（含截图 URL + 节点摘要）
      */
-    async dryRun(nodes: any[], packagePath: string): Promise<string> {
+    async dryRun(nodes: any[], packagePath: string, figmaData?: any): Promise<string> {
         const { summaries, depthUsed } = buildSummaries(nodes);
         const summaryJson = JSON.stringify(summaries, null, 2);
 
@@ -336,17 +334,44 @@ export class AISemanticTagger {
         const summaryPath = path.join(packagePath, 'ai_input_summary.json');
         await fs.writeFile(summaryPath, summaryJson, 'utf-8');
 
-        // 写 Prompt 说明文件（供 IDE AI 直接阅读）
+        // 提取界面截图 URL（Figma API 返回的 thumbnailUrl）
+        const thumbnailUrl: string | undefined = figmaData?.thumbnailUrl;
+
+        // 写 Prompt 说明文件
         const promptPath = path.join(packagePath, 'ai_input_prompt.md');
         const promptContent = [
             '# Figma → FGUI 语义标注任务',
             '',
             '## 操作说明',
             '',
-            '1. 阅读下方"节点摘要"，分析每个节点的 UI 语义',
-            '2. 按照"输出格式"要求返回 JSON',
-            `3. 将结果保存为 \`${packagePath}/semantic_tags.json\``,
-            '4. 再次运行 `bun run src/index.ts` 自动读取标注结果',
+            '1. **先看界面截图**（下方链接），理解整体 UI 布局和组件关系',
+            '2. **再看节点摘要**，对照截图理解每个节点对应界面上的哪个部分',
+            '3. 按照"输出格式"返回 JSON',
+            `4. 将结果保存为 \`${packagePath}/semantic_tags.json\``,
+            '5. 再次运行 `bun run convert <figma_url>` 自动读取标注结果',
+            '',
+            ...(thumbnailUrl ? [
+                '## 界面截图',
+                '',
+                '> 请先查看此截图，理解整体视觉布局，再分析节点摘要：',
+                '',
+                `![界面截图](${thumbnailUrl})`,
+                '',
+                `**截图 URL**（若上方图片无法显示，复制到浏览器查看）：`,
+                `\`${thumbnailUrl}\``,
+                '',
+            ] : [
+                '> ⚠️ 未获取到界面截图，请通过 Figma 链接手动查看设计稿',
+                '',
+            ]),
+            '## 分析重点',
+            '',
+            '请特别关注以下情况，需要准确识别：',
+            '- **Toggle 开关**（含 Ellipse + Rectangle 的小组件，约 60-80px 高）→ 识别为 `Slider`，并标注 `bar`（轨道）和 `grip`（圆形滑块）子节点',
+            '- **重复结构的多状态组件**（相同结构但填充色不同的多个实例）→ 识别为同一组件的变体，用 `state_pages` 标注开/关状态',
+            '- **含 Mask 的容器**（如带圆角裁剪的卡片）→ 标注为 `Component`，**不要**标注为 `Image`，让代码决定是否 SSR',
+            '- **导航菜单项**（图标 + 文字的重复单元）→ 识别为 `Label`，标注 `icon` 和 `title` 子节点',
+            '- **选项卡按钮**（横向排列的多个按钮）→ 识别为 `Button`',
             '',
             '## System Prompt（规则上下文）',
             '',

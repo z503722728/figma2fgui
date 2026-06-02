@@ -1,117 +1,205 @@
 ---
 name: design2fgui
 description: >
-  Figma → FairyGUI 转换工具的 AI-skill 版本。
-  在原 figma2fgui 代码管线基础上，引入：
-  1. rules/ 外置规则（JSON 配置，不改代码即可调整映射关系）
-  2. skill/ 模块文档（G01~G06，供 AI Agent 作为上下文读取）
-  3. AISemanticTagger（可选，AI 预处理节点语义，降级到规则模式）
-version: "0.1.0"
+  Figma → FairyGUI (FGUI) 转换工具。
+  用户提供 Figma 链接，AI（你）作为主 Agent 协调两个子 Agent 完成转换：
+  1. AnalyzeAgent：下载节点树 + 界面截图，动态生成 project-rules.json
+  2. ConvertAgent：根据动态规则执行转换，生成 FGUI XML 包
+  
+  整个流程在 IDE 内完成，无需手动编辑配置文件。
+version: "1.0.0"
 ---
 
-# design2fgui — Figma → FGUI 转换 Skill 路由
+# design2fgui — IDE AI 驱动的 Figma → FGUI 转换
+
+> **唯一入口**：用户粘贴 Figma 链接给 IDE AI，其余全部自动完成。
 
 ---
 
-## 目录结构
+## 你（主 Agent）的职责
+
+收到 Figma URL 后，按以下顺序执行：
+
+### 第一步：调用 AnalyzeAgent
+
+```bash
+bun run analyze <figma_url>
+```
+
+这会生成：
+- `{output}/ai_input_summary.json` — 节点树摘要（depth≤5）
+- `{output}/ai_input_prompt.md` — 含界面截图 URL + 分析任务
+- `{output}/figma_debug.json` — 原始 Figma 数据缓存
+
+**然后你读取 `ai_input_prompt.md`**（含截图 + 节点摘要），分析 UI 结构，生成 `project-rules.json` 和 `semantic_tags.json`，保存到同一目录。
+
+### 第二步：调用 ConvertAgent
+
+```bash
+bun run convert-only <figma_url>
+```
+
+读取第一步生成的两个文件，执行转换，输出 FGUI 包。
+
+---
+
+## AnalyzeAgent 产出规范
+
+你分析完 `ai_input_prompt.md` 后，需要生成两个文件：
+
+### 1. `project-rules.json` — 当前项目的动态规则
+
+```json
+{
+  "_note": "由 AI 根据本项目节点树动态生成，覆盖 rules/ 下的静态默认规则",
+  
+  "typeKeywords": {
+    "Button":      ["你在此项目中发现的按钮命名模式"],
+    "Slider":      ["你发现的 Toggle/开关命名模式，如 Group_4613"],
+    "Label":       ["导航菜单项命名模式"],
+    "ProgressBar": [],
+    "List":        []
+  },
+  
+  "backgroundNodeNames": ["bg", "背景色", "Rectangle_1276"],
+  
+  "excludeFromExtraction": ["装饰性节点名称，不应被提取为独立组件"],
+  
+  "componentGroups": [
+    {
+      "_note": "描述一组结构相同的重复组件实例",
+      "pattern": "Group_4613",
+      "semanticType": "Slider",
+      "states": {
+        "on":  { "fillColor": "#00C853" },
+        "off": { "fillColor": "#9E9E9E" }
+      }
+    }
+  ],
+  
+  "coordZeroThreshold": 3.5,
+  "scale": 2
+}
+```
+
+### 2. `semantic_tags.json` — 节点语义标注
+
+```json
+[
+  {
+    "node_id": "节点ID",
+    "semantic_type": "Button | Slider | Label | Component | ...",
+    "fgui_name": "语义化组件名（英文，无空格）",
+    "children_roles": {
+      "子节点ID": "title | icon | bar | grip | bg"
+    },
+    "state_pages": { "0": "normal", "1": "on/hover/..." },
+    "risks": ["不确定的地方"]
+  }
+]
+```
+
+---
+
+## 分析时的关键判断规则
+
+### Toggle 开关识别
+- 形态：含 `Ellipse`（圆形滑块）+ `Rectangle`（轨道）的小组件（高度约 30-80px）
+- 多个同名实例但颜色不同（绿色=开，灰色=关）→ 识别为 `Slider`
+- 标注 `children_roles`：轨道 → `bar`，圆形滑块 → `grip`
+- **不要**整体 SSR，要识别为可交互组件
+
+### 含 Mask 的容器
+- 含 `Mask_group` 子节点的容器 → 标注为 `Component`，**不是 Image**
+- 让管线决定 mask 内部如何处理
+
+### 导航菜单项
+- 重复的「图标 + 文字」单元 → `Label`
+- 选中态（高亮背景）与普通态 → 同一组件的不同状态，用 `state_pages` 标注
+
+### 背景节点（坐标原点）
+- 明确列出哪些节点是背景节点（名称放入 `backgroundNodeNames`）
+- 背景节点是面积最大、覆盖整个组件的底层矩形/图形
+- **不要**把按钮、装饰元素误标为背景
+
+### 重复组件合并
+- 相同结构的多个实例 → 提取为同一组件，在 `componentGroups` 中描述
+- 颜色/状态差异 → `state_pages` 多状态，不是多个不同组件
+
+---
+
+## 转换管线工作原理
+
+```
+bun run analyze <url>
+        ↓
+  下载 Figma 数据 + 生成摘要文件
+        ↓
+  [你在 IDE 里读 ai_input_prompt.md]
+  看截图 + 看节点摘要 → 理解 UI 结构
+        ↓
+  生成 project-rules.json   ← 动态覆盖 rules/*.json
+  生成 semantic_tags.json   ← 节点语义标注
+        ↓
+bun run convert-only <url>
+        ↓
+  读取 project-rules.json + semantic_tags.json
+  执行转换：解析 → 提取子组件 → 下载图片 → 生成 XML
+        ↓
+  输出 FGUI 包（可直接导入 FairyGUI 编辑器）
+```
+
+---
+
+## 出现问题时的修正流程
+
+```
+导入 FairyGUI 后发现问题
+        ↓
+你（IDE AI）查看 handoff.yaml（决策日志）
+        ↓
+定位问题节点 → 修改 semantic_tags.json 或 project-rules.json
+        ↓
+bun run convert-only <url>   ← 不需要重新下载，直接重跑转换
+        ↓
+验证修复
+```
+
+不需要修改代码，不需要重启，即改即跑。
+
+---
+
+## 项目目录结构
 
 ```
 design2fgui/
-├── SKILL.md                        # 本文件：路由 + 调度策略
-├── rules/                          # 外置规则（JSON，按项目覆盖）
-│   ├── type-keywords.json          # 节点名关键词 → FGUI ObjectType
-│   ├── naming-map.json             # 子节点角色 → 标准名称（title/icon/bar/grip）
-│   ├── exclude-names.json          # 排除列表 + 背景检测 + 坐标阈值
-│   ├── button-states.json          # Button 多状态页映射
-│   └── pipeline-config.json        # 全局缩放、批次参数等
-├── skill/                          # 模块文档（AI System Prompt 上下文）
-│   ├── G01-global-rules.md         # 全局约束 + 红线（所有 Agent 必读）
-│   ├── G02-colors-fills.md         # 颜色/填充/描边映射
-│   ├── G03-typography-spacing.md   # 字体/间距/圆角
-│   ├── G04-layout-coordinates.md   # 坐标系/展平/规范化
-│   ├── G05-components.md           # 组件类型/子组件提取/多状态
-│   └── G06-qc-handoff.md           # 验收 checklist + 冲突仲裁 + 回收 YAML
+├── SKILL.md                      # 本文件（主 Agent 入口）
+├── skill/                        # 知识模块（你需要读的规则文档）
+│   ├── G01-global-rules.md       # 全局约束（必读）
+│   ├── G02-colors-fills.md       # 颜色/填充
+│   ├── G03-typography-spacing.md # 字体/圆角
+│   ├── G04-layout-coordinates.md # 坐标系
+│   ├── G05-components.md         # 组件映射规则
+│   └── G06-qc-handoff.md         # 验收规范
+├── rules/                        # 静态默认规则（被 project-rules.json 动态覆盖）
+│   ├── pipeline-config.json      # scale、批次参数等（通常不需要覆盖）
+│   └── ...
 └── src/
-    ├── rules/
-    │   └── RuleLoader.ts           # 规则文件加载 + 快捷方法
-    └── tagger/
-        └── AISemanticTagger.ts     # AI 语义标注器（可选）
+    ├── analyze.ts                # AnalyzeAgent CLI（bun run analyze）
+    ├── cli.ts                    # ConvertAgent CLI（bun run convert-only）
+    └── index.ts                  # 核心转换管线（run() 函数）
 ```
 
 ---
 
-## 模块概览
+## 环境配置（仅需一次）
 
-| ID | 主题 | 文件 |
-|---|---|---|
-| G01 | 全局约束 / 红线 / AI 层说明 | [skill/G01-global-rules.md](./skill/G01-global-rules.md) |
-| G02 | 颜色 / 填充 / 描边 / 渐变 | [skill/G02-colors-fills.md](./skill/G02-colors-fills.md) |
-| G03 | 字体 / 间距 / 圆角 / 缩放 | [skill/G03-typography-spacing.md](./skill/G03-typography-spacing.md) |
-| G04 | 坐标系 / 展平 / 规范化 / 旋转 | [skill/G04-layout-coordinates.md](./skill/G04-layout-coordinates.md) |
-| G05 | 组件映射 / 提取 / 标准命名 / 多状态 | [skill/G05-components.md](./skill/G05-components.md) |
-| G06 | 验收 / 冲突仲裁 / 回收 YAML | [skill/G06-qc-handoff.md](./skill/G06-qc-handoff.md) |
+在 `.env` 中填写 Figma Token：
 
----
-
-## 调度策略（根据任务类型选读模块）
-
-| 任务 | 读哪些模块 |
-|---|---|
-| 调整组件类型识别规则 | G01 + **G05** → 修改 `rules/type-keywords.json` |
-| 调整子节点命名规则 | G01 + **G05** → 修改 `rules/naming-map.json` |
-| 调整颜色/填充处理 | G01 + **G02** |
-| 调整字号/圆角缩放 | G01 + **G03** → 修改 `rules/pipeline-config.json` |
-| 调整坐标/背景识别 | G01 + **G04** → 修改 `rules/exclude-names.json` |
-| 调整 Button 多状态 | G01 + **G05** → 修改 `rules/button-states.json` |
-| 完整转换流程 | G01 → G02 → G03 → G04 → G05 → G06 |
-| 验收/排查问题 | **G06**（含冲突仲裁路由表） |
-| AI 标注调优 | G01 + **G05**（修改 skill 文档即修改 AI System Prompt） |
-
-### 推荐并行批次
-
-- **批次 1（完全并行）**：G01 · G02 · G03
-- **批次 2（依赖批次 1）**：G04 · G05
-- **批次 3（依赖批次 1-2）**：G06（验收汇总）
-
----
-
-## 规则 vs AI 双模式
-
-```
-有 AI_API_KEY                           无 AI_API_KEY / SKIP_AI_TAGGER=true
-        ↓                                           ↓
-AISemanticTagger                         rules/type-keywords.json
-（语义理解，更准确）                      （关键词匹配，速度快）
-        ↓                                           ↓
-         └──────────────→ UINode.semanticType ←──────┘
-                                  ↓
-                     SubComponentExtractor（使用 semanticType）
-                                  ↓
-                              XMLGenerator
+```ini
+FIGMA_TOKEN=figd_your_personal_access_token
+OUTPUT_PATH=./FGUIProject/assets   # 可选
 ```
 
-两条路径最终汇聚到同一管线，AI 失败时无缝降级，不中断流程。
-
----
-
-## 冲突仲裁路由
-
-| 冲突类型 | 仲裁模块 |
-|---|---|
-| 组件类型误判 | G05 → 更新 type-keywords.json |
-| 子节点命名错误 | G05 → 更新 naming-map.json |
-| 颜色/填充属性 | G02 |
-| 坐标偏移/背景识别 | G04 → 更新 exclude-names.json |
-| AI 标注不准确 | G05 → 在 skill 文档中补充项目约定 |
-| 终审 | G06 |
-
----
-
-## 全局红线摘要
-
-- **规则外置**：一切可变规则存 `rules/` JSON，禁止在代码中硬编码映射关键词/阈值
-- **确定性 ID**：Package ID = `{prefix}` + MD5(nodeId)，保证 FGUI 引用稳定
-- **降级优雅**：AI 失败 → 规则模式；规则未命中 → Component 类型 + risks 日志
-- **回收 YAML**：每次转换输出结构化决策日志，供 G06 验收和问题复现
-
-详细约束进入对应模块查阅。
+> Token 获取：[Figma Settings → Personal access tokens](https://www.figma.com/settings)  
+> 权限：File content: Read-only

@@ -7,8 +7,8 @@
   },
 
   "backgroundDetection": {
-    "_comment": "这些名称被 justifyComponentLayout 识别为背景节点（坐标原点）",
-    "keywords": ["bg", "background", "底", "back", "backdrop", "base"]
+    "_comment": "这些名称被 justifyComponentLayout 识别为背景节点（坐标原点）。使用精确前缀匹配（以该词开头或完全等于），避免误匹配 Btn_Back 等",
+    "keywords": ["bg", "background", "底", "backdrop", "base"]
   },
 
   "invisibleFilter": {

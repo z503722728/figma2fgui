@@ -287,11 +287,22 @@ export class ImagePipeline {
         if ((hasVisualProps || hasFillPaths) && !this.hasTextChildren(node)) return true;
 
         if (node.children && node.children.length > 0 && this.allDescendantsAreShapes(node)) {
+            // 💡 AI 语义标注为 Slider 的节点即使全为形状也不 SSR（Toggle 开关组件）
+            if ((node as any).semanticType === 'Slider') {
+                return false;
+            }
             console.log(`🧩 isVisualLeaf: Treating "${node.name}" as atomic unit (all children are shapes)`);
             return true;
         }
 
-        if (node.children && node.children.length > 0 && !node.asComponent && this.hasMaskDescendants(node)) {
+        // 💡 含 mask 的节点：
+        // - asComponent=true（提取的子组件）→ 不 SSR，让子节点各自处理
+        // - AI 标注了 semanticType（Component/Label 等）→ 不 SSR，尊重 AI 判断
+        // - 其余 → 整体 SSR 保留 mask 效果
+        const hasSemanticTag = !!(node as any).semanticType;
+        if (node.children && node.children.length > 0
+            && !node.asComponent && !hasSemanticTag
+            && this.hasMaskDescendants(node)) {
             console.log(`🎭 isVisualLeaf: Treating "${node.name}" as atomic unit (contains mask descendants)`);
             return true;
         }

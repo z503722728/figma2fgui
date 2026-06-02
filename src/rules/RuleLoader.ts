@@ -6,6 +6,79 @@ const RULES_DIR = path.resolve(__dirname, '../../rules');
 // 缓存已加载的规则文件，避免重复读取
 const cache = new Map<string, any>();
 
+// 当前项目的动态规则（由 AI 生成，优先级高于静态规则）
+let _projectRules: ProjectRules | null = null;
+let _projectRulesPath = '';
+
+// ─── 动态规则结构（由 AI 生成的 project-rules.json）────────────────────────
+
+export interface ProjectRules {
+    _generated_by?: string;
+    _figma_url?: string;
+    _note?: string;
+
+    /** 覆盖 type-keywords.json：节点名关键词 → FGUI 组件类型 */
+    typeKeywords?: Record<string, string[]>;
+
+    /** 覆盖 exclude-names.json：被识别为背景原点的节点名 */
+    backgroundNodeNames?: string[];
+
+    /** 覆盖 exclude-names.json：不提取为子组件的节点名 */
+    excludeFromExtraction?: string[];
+
+    /** 描述重复结构的组件组（用于多状态合并） */
+    componentGroups?: ComponentGroupRule[];
+
+    /** 覆盖 pipeline-config.json：坐标归零阈值 */
+    coordZeroThreshold?: number;
+
+    /** 覆盖 pipeline-config.json：全局缩放 */
+    scale?: number;
+}
+
+export interface ComponentGroupRule {
+    _note?: string;
+    namePattern: string;
+    semanticType: string;
+    stateIndicator?: string;
+    states?: Record<string, any>;
+}
+
+/**
+ * 加载项目动态规则文件。
+ * 由 ConvertAgent 在启动时调用，传入包目录路径。
+ */
+export function loadProjectRules(packagePath: string): void {
+    const rulesPath = path.join(packagePath, 'project-rules.json');
+    _projectRulesPath = rulesPath;
+    if (!fs.existsSync(rulesPath)) {
+        _projectRules = null;
+        return;
+    }
+    try {
+        _projectRules = JSON.parse(fs.readFileSync(rulesPath, 'utf-8')) as ProjectRules;
+        console.log(`📐 已加载动态规则: ${rulesPath}`);
+        if (_projectRules.typeKeywords) {
+            const types = Object.keys(_projectRules.typeKeywords).join(', ');
+            console.log(`   类型关键词覆盖: ${types}`);
+        }
+        if (_projectRules.backgroundNodeNames?.length) {
+            console.log(`   背景节点名: ${_projectRules.backgroundNodeNames.join(', ')}`);
+        }
+    } catch (e: any) {
+        console.warn(`⚠️  project-rules.json 解析失败，使用静态规则: ${e.message}`);
+        _projectRules = null;
+    }
+    // 动态规则加载后清空缓存，确保静态规则也重新读取（用于合并）
+    cache.clear();
+}
+
+export function getProjectRules(): ProjectRules | null {
+    return _projectRules;
+}
+
+// ─── 静态规则加载（rules/ 目录）─────────────────────────────────────────────
+
 export function loadRule<T = any>(filename: string): T {
     if (cache.has(filename)) return cache.get(filename) as T;
     const filePath = path.join(RULES_DIR, filename);
@@ -18,7 +91,7 @@ export function loadRule<T = any>(filename: string): T {
     return parsed;
 }
 
-// ─── 类型快捷方法 ────────────────────────────────────────────────────────────
+// ─── 类型定义 ────────────────────────────────────────────────────────────────
 
 export interface TypeKeywordEntry {
     keywords: string[];
@@ -61,11 +134,27 @@ export const Rules = {
     pipeline:     () => loadRule<PipelineConfig>('pipeline-config.json'),
 };
 
-/** 根据 type-keywords.json 规则匹配 FGUI ObjectType 名称。未命中返回 null。 */
+// ─── 动态规则优先的查询函数 ──────────────────────────────────────────────────
+
+/**
+ * 匹配节点名 → FGUI ObjectType。
+ * 优先级：project-rules.typeKeywords > rules/type-keywords.json
+ */
 export function matchObjectType(nodeName: string): string | null {
     const name = nodeName.toLowerCase();
-    const map = Rules.typeKeywords();
 
+    // 1. 动态规则优先
+    if (_projectRules?.typeKeywords) {
+        for (const [typeName, keywords] of Object.entries(_projectRules.typeKeywords)) {
+            if (typeName.startsWith('_')) continue;
+            if (keywords.some(kw => name.includes(kw.toLowerCase()))) {
+                return typeName;
+            }
+        }
+    }
+
+    // 2. 静态规则兜底
+    const map = Rules.typeKeywords();
     for (const [typeName, entry] of Object.entries(map)) {
         if (typeName.startsWith('_')) continue;
         const excluded = entry.exclude.some(ex => name.includes(ex.toLowerCase()));
@@ -84,7 +173,6 @@ export function matchStandardName(
 ): string | null {
     const nm = Rules.namingMap();
     const lname = childName.toLowerCase();
-
     for (const [stdName, entry] of Object.entries(nm)) {
         if (stdName.startsWith('_')) continue;
         if (!entry.applyTo.includes(parentType)) continue;
@@ -95,16 +183,70 @@ export function matchStandardName(
     return null;
 }
 
-/** 判断节点名称是否在排除列表中（组件提取阶段）。 */
+/**
+ * 判断节点名是否应该排除出组件提取。
+ * 优先级：project-rules.excludeFromExtraction > rules/exclude-names.json
+ */
 export function isExcludedFromExtraction(nodeName: string): boolean {
-    const { componentExtraction } = Rules.excludes();
     const name = nodeName.toLowerCase();
+
+    // 动态规则优先
+    if (_projectRules?.excludeFromExtraction?.length) {
+        if (_projectRules.excludeFromExtraction.some(kw => name.includes(kw.toLowerCase()))) {
+            return true;
+        }
+    }
+
+    // 静态规则兜底
+    const { componentExtraction } = Rules.excludes();
     return componentExtraction.keywords.some(kw => name.includes(kw.toLowerCase()));
 }
 
-/** 判断节点名称是否是背景节点（坐标原点识别）。 */
+/**
+ * 判断节点名是否是背景节点。
+ * 优先级：project-rules.backgroundNodeNames > rules/exclude-names.json
+ */
 export function isBackgroundNode(nodeName: string): boolean {
-    const { backgroundDetection } = Rules.excludes();
     const name = nodeName.toLowerCase();
+
+    // 动态规则优先（精确名称匹配）
+    if (_projectRules?.backgroundNodeNames?.length) {
+        if (_projectRules.backgroundNodeNames.some(n => name === n.toLowerCase())) {
+            return true;
+        }
+    }
+
+    // 静态规则兜底（关键词包含匹配）
+    const { backgroundDetection } = Rules.excludes();
     return backgroundDetection.keywords.some(kw => name.includes(kw.toLowerCase()));
+}
+
+/**
+ * 获取坐标归零阈值。
+ * 优先级：project-rules.coordZeroThreshold > rules/pipeline-config.json
+ */
+export function getCoordZeroThreshold(): number {
+    if (_projectRules?.coordZeroThreshold !== undefined) {
+        return _projectRules.coordZeroThreshold;
+    }
+    try {
+        return Rules.excludes().coordZeroThreshold.px;
+    } catch {
+        return 3.5;
+    }
+}
+
+/**
+ * 获取全局缩放倍率。
+ * 优先级：project-rules.scale > rules/pipeline-config.json
+ */
+export function getScale(): number {
+    if (_projectRules?.scale !== undefined) {
+        return _projectRules.scale;
+    }
+    try {
+        return Rules.pipeline().scale.value;
+    } catch {
+        return 2;
+    }
 }

@@ -1,6 +1,6 @@
 import { UINode } from './models/UINode';
 import { ObjectType } from './models/FGUIEnum';
-import { matchObjectType, Rules } from './rules/RuleLoader';
+import { matchObjectType, getCoordZeroThreshold } from './rules/RuleLoader';
 
 /**
  * RawFigmaParser: 直接解析 Figma REST API 返回的原始数据树。
@@ -14,11 +14,7 @@ export class RawFigmaParser {
     private _coordZeroThreshold: number;
 
     constructor() {
-        try {
-            this._coordZeroThreshold = Rules.excludes().coordZeroThreshold.px;
-        } catch {
-            this._coordZeroThreshold = 3.5; // 兜底默认值
-        }
+        this._coordZeroThreshold = getCoordZeroThreshold();
     }
 
     public parse(figmaData: any): UINode[] {
