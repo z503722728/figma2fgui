@@ -7,6 +7,7 @@ import { XMLGenerator } from './generator/XMLGenerator';
 import { SubComponentExtractor } from './generator/SubComponentExtractor';
 import { FigmaClient } from './FigmaClient';
 import { ImagePipeline } from './ImagePipeline';
+import { ImageComposer } from './ImageComposer';
 import { UINode, ResourceInfo } from './models/UINode';
 import { sanitizeFileName, FGUI_SCALE } from './Common';
 import { AISemanticTagger } from './tagger/AISemanticTagger';
@@ -183,7 +184,8 @@ export async function run(opts: RunOptions): Promise<void> {
                 console.log(`🖼️ 匹配已有 PNG: ${node.name} → ${foundPng}`);
                 const res: ResourceInfo = {
                     id: 'img_' + sanitizedId, name: foundPng, type: 'image',
-                    width: Math.round(node.width), height: Math.round(node.height)
+                    width: Math.round(node.width), height: Math.round(node.height),
+                    _sourceId: rawId,  // 保留 sourceId 供 ImageComposer 使用
                 };
                 allResources.push(res);
                 node.src = res.id;
@@ -285,7 +287,15 @@ export async function run(opts: RunOptions): Promise<void> {
                     'Button', 'Label', 'Slider', 'ProgressBar', 'ComboBox', 'List'
                 ].includes(compRootFn.extention ?? '');
 
+                // 💡 List item template：整体 SSR 成一张图（含圆角背景 + 图片遮罩）
+                const isListItem = !!(compRootFn as any)._isListItem;
+
                 if (!isPureShape || isExtensionComp) {
+                    matchExistingPngs([compRootFn]);
+                    pipeline.scanAndEnqueue([compRootFn], allResources);
+                } else if (isListItem) {
+                    // List item template：直接把整个节点作为一张图入队
+                    (compRootFn as any)._mergeWithParent = true;
                     matchExistingPngs([compRootFn]);
                     pipeline.scanAndEnqueue([compRootFn], allResources);
                 } else {
@@ -304,7 +314,100 @@ export async function run(opts: RunOptions): Promise<void> {
     // ─── 5. 下载图片 ──────────────────────────────────────────────────────────────
     await pipeline.execute();
 
-    // ─── 6. 生成 XML ──────────────────────────────────────────────────────────────
+    // ─── 5.5 本地多图合成（merge_layers） ───────────────────────────────────────
+    // 遍历节点树，找到带 _mergeLayers 的节点，用 sharp 将各图层合成一张图。
+    // 合成完成后更新节点的 src/fileName，使 XML 引用合成图而不是原始各层图。
+    {
+        const composer = new ImageComposer(imgDir);
+
+        // 构建 sourceId → UINode 全局映射（包含已提取的组件节点）
+        const allNodesMap = new Map<string, UINode>();
+        const collectNodes = (node: UINode) => {
+            if (node.sourceId) allNodesMap.set(node.sourceId, node);
+            allNodesMap.set(node.id, node);
+            node.children?.forEach(collectNodes);
+        };
+        rootNodes.forEach(collectNodes);
+        // 同时收集已提取的组件节点（它们在 rootNodes 里已被 asComponent 引用替换）
+        extractedNodesMap.forEach(node => collectNodes(node));
+
+        // 构建 sourceId → { filePath, resId, width, height } 映射（来自已下载图片）
+        const imgResMap = new Map<string, { filePath: string; resId: string; width: number; height: number }>();
+        for (const res of allResources) {
+            if (res.type === 'image' && res.name && res._sourceId) {
+                imgResMap.set(res._sourceId, {
+                    filePath: path.join(imgDir, res.name),
+                    resId:    res.id,
+                    width:    res.width || 0,
+                    height:   res.height || 0,
+                });
+            }
+        }
+
+        // 同时收集 root nodes 和提取的组件节点里的 merge_layers 任务
+        const allNodesToScan: UINode[] = [...rootNodes];
+        for (const res of componentResources) {
+            if (res.type === 'component' && res.data) {
+                try { allNodesToScan.push(JSON.parse(res.data) as UINode); } catch {}
+            }
+        }
+
+        const composeTasks = composer.buildTasks(allNodesToScan, allNodesMap, imgResMap);
+
+        if (composeTasks.length > 0) {
+            console.log(`🎨 [ImageComposer] 开始合成 ${composeTasks.length} 张合并图...`);
+            await composer.compose(composeTasks);
+
+            // 更新节点 src/fileName，使 XML 引用合成图
+            const updateMergedSrc = (node: UINode) => {
+                const ml = (node as any)._mergeLayers;
+                if (ml) {
+                    const task = composeTasks.find(t => {
+                        // 匹配主节点：task 的 outputResId 包含主节点 sourceId
+                        const sid = (node.sourceId || node.id).replace(/[^a-zA-Z0-9]/g, '_');
+                        return t.outputResId.includes(sid);
+                    });
+                    if (task) {
+                        // 检查合成文件是否存在
+                        const composedPath = path.join(imgDir, task.outputFileName);
+                        if (fs.existsSync(composedPath)) {
+                            // 注册合成图到 allResources
+                            const existing = allResources.find(r => r.id === task.outputResId);
+                            if (!existing) {
+                                allResources.push({
+                                    id:     task.outputResId,
+                                    name:   task.outputFileName,
+                                    type:   'image',
+                                    width:  task.clipWidth,
+                                    height: task.clipHeight,
+                                });
+                            }
+                            // 更新节点引用
+                            node.src      = task.outputResId;
+                            node.fileName = 'img/' + task.outputFileName;
+                            node.children = []; // 清空原始子节点
+                            console.log(`✅ [ImageComposer] "${node.name}" → ${task.outputFileName}`);
+                        }
+                    }
+                }
+
+                // _mergedInto 节点：标记为不可见（父节点已包含其内容）
+                if ((node as any)._mergedInto) {
+                    node.visible = false;
+                }
+
+                node.children?.forEach(updateMergedSrc);
+            };
+            rootNodes.forEach(updateMergedSrc);
+            // 同时更新已提取的组件节点（它们不在 rootNodes 里）
+            extractedNodesMap.forEach(node => updateMergedSrc(node));
+            // 更新后的组件节点重新序列化
+            extractedNodesMap.forEach((node, resId) => {
+                const res = componentResources.find(r => r.id === resId);
+                if (res) res.data = JSON.stringify(node);
+            });
+        }
+    }
     // Package ID: prefix + MD5(nodeId)[0:length]，来自 pipeline-config.json
     const idSeed = FIGMA_NODE_ID || 'CloudPackage';
     const cfg = (() => { try { return Rules.pipeline().packageId; } catch { return { prefix: 'd2f', length: 5 }; } })();
@@ -320,7 +423,9 @@ export async function run(opts: RunOptions): Promise<void> {
         if (res.type === 'component' && res.data) {
             const compNode = extractedNodesMap.get(res.id) || JSON.parse(res.data) as UINode;
             const hasVisuals = compNode.styles.fillType || compNode.styles.strokeSize;
-            if (!compNode.children?.length && !hasVisuals) continue;
+            const isListItemTemplate = !!(compNode as any)._isListItem;
+            // List item template 即使子节点清空也需要生成 XML（有图片 src）
+            if (!compNode.children?.length && !hasVisuals && !compNode.listItemTemplate && !isListItemTemplate && !compNode.src) continue;
 
             let safeName = sanitizeFileName(res.name);
             if (processedNames.has(safeName)) {
@@ -335,7 +440,7 @@ export async function run(opts: RunOptions): Promise<void> {
                 compNode.children || [], buildId,
                 compNode.width, compNode.height,
                 compNode.styles, compNode.extention, compNode.controllers,
-                compNode.buttonMode
+                compNode.buttonMode, compNode.listItemTemplate
             );
             await fs.writeFile(path.join(packagePath, safeName + '.xml'), xmlContent);
             res.name = safeName;

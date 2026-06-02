@@ -118,6 +118,7 @@ export class ImagePipeline {
             type: 'image',
             width:  Math.round((node.width  + padding * 2) * FGUI_SCALE),
             height: Math.round((node.height + padding * 2) * FGUI_SCALE),
+            _sourceId: sourceId,  // 保留原始 sourceId 供 ImageComposer 使用
         };
     }
 

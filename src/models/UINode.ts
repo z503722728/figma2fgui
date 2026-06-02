@@ -52,10 +52,26 @@ export interface UINode {
      */
     _mergedInto?: string;
     _mergedIntoPrimary?: any;
+    /**
+     * 本地多图合并配置（来自 AI 标注的 merge_layers 字段）。
+     * ImageComposer 会下载各图层后用 sharp 合成一张。
+     */
+    _mergeLayers?: {
+        nodes: string[];
+        clip?: boolean;
+        clip_to?: string;
+    };
 
     overrides?: Record<string, any>;
     rotation?: number;
     extention?: string;
+    /**
+     * List 组件的 defaultItem 模板名称（AI 标注 list_item_template 字段传入）
+     * 对应 FGUI XML: <list defaultItem="ui://{buildId}{itemResId}"/>
+     */
+    listItemTemplate?: string;
+    /** AI 标注的 list item template 名称（用于从子节点中找 template，传给 SubComponentExtractor）*/
+    _listItemTemplateName?: string;
     /**
      * Button 模式：Common（普通）| Check（复选/Toggle）| Radio（单选）
      * 对应 FGUI XML: <Button mode="Check"/>
@@ -93,4 +109,6 @@ export interface ResourceInfo {
     width?: number;
     height?: number;
     exported?: boolean;
+    /** 对应的 Figma sourceId（用于 ImageComposer 建立映射） */
+    _sourceId?: string;
 }

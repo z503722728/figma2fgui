@@ -23,14 +23,21 @@ export class XMLGenerator {
         rootStyles?: Record<string, any>,
         extention?: string,
         controllers?: any[],
-        buttonMode?: string
+        buttonMode?: string,
+        listItemTemplate?: string
     ): string {
         const component = xmlbuilder.create('component').att('size', `${width * FGUI_SCALE},${height * FGUI_SCALE}`);
         if (extention) component.att('extention', extention);
 
         if (extention === 'Button') {
-            // Button 前置声明（Button标签 + controller）由 ButtonHandler 统一处理
             this._registry.getButtonHandler().writeButtonPreamble(component, buttonMode);
+        } else if (extention === 'List') {
+            // List 组件：<List defaultItem="ui://..." layout="FlowH" overflow="scroll"/>
+            const listAttrs: Record<string, string> = { layout: 'FlowH', overflow: 'scroll' };
+            if (listItemTemplate) {
+                listAttrs.defaultItem = `ui://${buildId}${listItemTemplate}`;
+            }
+            component.ele('List', listAttrs);
         } else if (controllers && controllers.length > 0) {
             controllers.forEach(c => component.ele('controller', { name: c.name, pages: c.pages }));
         }

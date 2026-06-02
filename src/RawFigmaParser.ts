@@ -100,6 +100,10 @@ export class RawFigmaParser {
             buttonMode: node.buttonMode,
             // 合并渲染标记
             _mergedInto: node._mergedInto,
+            // 本地多图合并配置
+            _mergeLayers: node._mergeLayers,
+            // List item template 名称（AI 标注）
+            _listItemTemplateName: node._listItemTemplateName,
         };
 
         if (uiNode.type === ObjectType.ProgressBar || uiNode.type === ObjectType.Slider) {

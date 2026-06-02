@@ -121,6 +121,55 @@ export class SubComponentExtractor {
                 }
             }
 
+            // ─── List 组件：提取 item template 为独立组件 ─────────────────────────
+            // AI 通过 list_item_template 指定模板名称；如果没有则取第一个子节点。
+            // 提取后 List 自身不再展开子节点，由 defaultItem 引用 template。
+            if (cleanNode.extention === 'List' && cleanNode.children?.length) {
+                const templateName = (cleanNode as any)._listItemTemplateName;
+
+                // 优先从全局组件缓存里按名称查找已提取的 template（如 GachaItem）
+                let foundInCache: ResourceInfo | undefined;
+                if (templateName) {
+                    for (const res of this._newResources) {
+                        if (res.name === templateName) { foundInCache = res; break; }
+                    }
+                }
+
+                if (foundInCache) {
+                    cleanNode.listItemTemplate = foundInCache.id;
+                    console.log(`📋 List "${cleanNode.name}" → 全局 template: "${foundInCache.name}" (${foundInCache.id})`);
+                } else {
+                    // 回退：在直接子节点里找（按名称，否则取第一个）
+                    const templateChild = templateName
+                        ? (cleanNode.children.find(c => c.name === templateName) || cleanNode.children[0])
+                        : cleanNode.children[0];
+
+                    if (templateChild) {
+                        const templateHash = this.calculateStructuralHash(templateChild);
+                        const existingRes = this._componentCache.get(templateHash);
+                        if (existingRes) {
+                            cleanNode.listItemTemplate = existingRes.id;
+                            console.log(`📋 List "${cleanNode.name}" → 复用 template: "${existingRes.name}"`);
+                        } else {
+                            const templateResId = `comp_tmpl_${this._nextCompId++}`;
+                            const safeName = (templateName || templateChild.name).replace(/\s+/g, '');
+                            const strippedTemplate = this.stripParent(templateChild);
+                            const templateRes: ResourceInfo = {
+                                id: templateResId,
+                                name: safeName,
+                                type: 'component',
+                                data: JSON.stringify({ ...strippedTemplate, _isListItem: true })
+                            };
+                            this._componentCache.set(templateHash, templateRes);
+                            this._newResources.push(templateRes);
+                            cleanNode.listItemTemplate = templateResId;
+                            console.log(`📋 List "${cleanNode.name}" → 新 template: "${safeName}" (${templateResId})`);
+                        }
+                    }
+                }
+                cleanNode.children = [];
+            }
+
             cachedRes.data = JSON.stringify(cleanNode);
             this._newResources.push(cachedRes);
         }
@@ -153,9 +202,11 @@ export class SubComponentExtractor {
         );
 
         // 纯形状组：只有非扩展类型才跳过提取（让 SSR 整体渲染）
-        if (!isExtensionType && this.allDescendantsAreShapes(node)) return;
+        // 例外：AI 明确标注了 semanticType 的节点（如 GachaItem），即使全是形状也要提取为独立组件
+        const hasSemanticTag = !!(node as any).semanticType;
+        if (!isExtensionType && !hasSemanticTag && this.allDescendantsAreShapes(node)) return;
 
-        if (!isExtensionType && this.hasMaskDescendants(node)) return;
+        if (!isExtensionType && !hasSemanticTag && this.hasMaskDescendants(node)) return;
 
         const hasNestedExtracted = node.children.some(c => c.asComponent);
         const hasVisuals = (node.styles.background || node.styles.backgroundColor || node.styles.border || node.styles.outline);
