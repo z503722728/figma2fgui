@@ -40,6 +40,20 @@ export interface NodeSemanticTag {
      * AI 在分析时填写，代码会把该名称对应的第一个子节点提取为 defaultItem 组件。
      */
     list_item_template?: string;
+    /**
+     * 节点重新挂载（层级调整）：
+     *   new_parent = 目标父节点 ID（此节点将从当前位置移入该父节点）
+     *   role       = 在新父节点中的角色名（写入新父节点的 children_roles）
+     *
+     * 使用场景：
+     *   - Figma 中平级的两个 Frame，设计上应属于父子关系
+     *   - 弹窗底部按钮栏被单独放在页面顶层，实际应归入弹窗组件
+     *   - 节点坐标会自动转换为相对新父节点的坐标（基于 absoluteBoundingBox）
+     */
+    reparent?: {
+        new_parent: string;
+        role?: string;
+    };
     /** 需人工干预的风险说明 */
     risks?: string[];
 }
@@ -155,7 +169,7 @@ function buildSystemPrompt(): string {
     const g01 = loadSkillModule('G01-global-rules.md');
     const g05 = loadSkillModule('G05-components.md');
 
-    return `你是一个专业的 FairyGUI（FGUI）UI 转换助手。你的任务是分析 Figma 节点树摘要，为每个节点打上语义标注，指导后续的 FGUI XML 生成。
+    return `你是一个专业的 FairyGUI（FGUI）UI 转换助手。你的任务是分析 Figma 节点树摘要，为每个节点打上语义标注，同时可以调整节点层级关系，指导后续的 FGUI XML 生成。
 
 ${g01 ? `## 全局规则（G01）\n${g01}` : ''}
 
@@ -163,15 +177,25 @@ ${g05 ? `## 组件映射规则（G05）\n${g05}` : ''}
 
 ## 你的输出格式
 
-请严格以 JSON 数组格式返回，每个元素对应一个顶层节点：
+请严格以 JSON 数组格式返回，每个元素对应一个节点：
 
 \`\`\`json
 [
   {
     "node_id": "节点ID",
     "semantic_type": "Button | ProgressBar | Slider | Label | List | Component | Text | Image | Group",
+    "fgui_name": "语义化组件名（可选，替换 Frame_24 等机械名）",
     "children_roles": {
       "子节点ID": "title | icon | bar | grip | bg"
+    },
+    "reparent": {
+      "new_parent": "目标父节点ID",
+      "role": "在新父节点中的角色名（可选）"
+    },
+    "merge_layers": {
+      "nodes": ["节点ID1", "节点ID2"],
+      "clip": true,
+      "clip_to": "裁剪基准节点ID"
     },
     "state_pages": {
       "0": "normal",
@@ -189,6 +213,23 @@ ${g05 ? `## 组件映射规则（G05）\n${g05}` : ''}
 3. **state_pages** 仅对 Button 类节点填写，列出识别出的状态变体
 4. **risks** 列出你不确定的映射，方便人工复查
 5. 无法判断时，semantic_type 填 "Component"，不要猜测
+
+## reparent（层级调整）使用规则
+
+当以下情况出现时，输出 reparent 字段将节点移入正确的父节点：
+
+- **弹窗按钮栏**：底部的"确定/取消"按钮栏在 Figma 中与弹窗同级，但设计上属于弹窗的一部分
+  → 将按钮栏 reparent 到弹窗节点
+- **头部/尾部装饰条**：与主体容器同级的顶部/底部装饰，实际应在容器内
+  → reparent 到主体容器
+- **浮层与主面板同级**：某个小组件（角标、提示气泡）位置上完全在某个大容器内，但 Figma 层级是平级
+  → reparent 到包含它的大容器
+- **判断标准**：节点的 absoluteBoundingBox 完全在目标父节点的 boundingBox 范围内，且名称/语义上归属明确
+
+注意：
+- 只在确定归属时才输出 reparent，不确定则保持原始层级
+- reparent 的目标必须是同一批节点中存在的 node_id
+- 坐标会自动转换，无需手动计算
 
 只返回 JSON，不要有其他解释文字。`;
 }
@@ -319,10 +360,18 @@ export class AISemanticTagger {
     /**
      * 将 AI 标注结果合并回 UINode 树（写入 node.semanticType 和 node.childrenRoles）。
      * 后续 RawFigmaParser / SubComponentExtractor 优先读取这些字段。
+     *
+     * 步骤：
+     *  1. reparentNodes()：按 reparent 指令调整节点层级（坐标自动转换）
+     *  2. 第二遍：写入 semanticType / childrenRoles 等字段
      */
     applyTags(nodes: any[], result: SemanticTagResult): void {
         const tagMap = new Map(result.tags.map(t => [t.node_id, t]));
 
+        // ── 步骤 1：执行 reparent（层级调整） ──────────────────────────────────
+        this.reparentNodes(nodes, tagMap);
+
+        // ── 步骤 2：写语义字段 ─────────────────────────────────────────────────
         const apply = (node: any) => {
             const tag = tagMap.get(node.id ?? node.sourceId);
             if (tag) {
@@ -351,6 +400,10 @@ export class AISemanticTagger {
                 if (tag.list_item_template) {
                     node._listItemTemplateName = tag.list_item_template;
                 }
+                // reparent 标记（已在步骤 1 处理，这里只记录日志用）
+                if (tag.reparent) {
+                    node._reparentedTo = tag.reparent.new_parent;
+                }
             }
             node.children?.forEach(apply);
         };
@@ -364,6 +417,98 @@ export class AISemanticTagger {
             node.children?.forEach(collectAll);
         };
         nodes.forEach(collectAll);
+    }
+
+    /**
+     * 执行 reparent 指令：
+     *  1. 收集所有节点到 Map（含递归子节点）
+     *  2. 按 reparent 指令将节点从原父节点移除，插入目标父节点
+     *  3. 用 absoluteBoundingBox 做坐标系转换（相对→新父节点坐标系）
+     *
+     * 注意：reparent 只在原始 Figma 节点层（applyTags 入参）上操作，
+     * 不涉及 UINode（UINode 在 RawFigmaParser 之后才构建）。
+     */
+    private reparentNodes(nodes: any[], tagMap: Map<string, NodeSemanticTag>): void {
+        // 1. 构建全局 id → node 映射，同时记录 id → parent 映射
+        const nodeMap    = new Map<string, any>();
+        const parentMap  = new Map<string, any>(); // childId → parentNode
+
+        const collect = (node: any, parent?: any) => {
+            const id = node.id ?? node.sourceId;
+            if (id) {
+                nodeMap.set(id, node);
+                if (parent) parentMap.set(id, parent);
+            }
+            node.children?.forEach((c: any) => collect(c, node));
+        };
+        nodes.forEach(n => collect(n, null));
+
+        // 2. 找出所有需要 reparent 的节点
+        const reparentTags = Array.from(tagMap.values()).filter(t => t.reparent);
+
+        for (const tag of reparentTags) {
+            const nodeId     = tag.node_id;
+            const newParentId = tag.reparent!.new_parent;
+            const role        = tag.reparent!.role;
+
+            const node      = nodeMap.get(nodeId);
+            const newParent = nodeMap.get(newParentId);
+            const oldParent = parentMap.get(nodeId);
+
+            if (!node) {
+                console.warn(`⚠️  [reparent] 节点 ${nodeId} 不存在，跳过`);
+                continue;
+            }
+            if (!newParent) {
+                console.warn(`⚠️  [reparent] 目标父节点 ${newParentId} 不存在，跳过`);
+                continue;
+            }
+            if (!newParent.children) newParent.children = [];
+
+            // 3. 坐标转换：绝对坐标 → 相对新父节点
+            const nodeBox   = node.absoluteBoundingBox;
+            const parentBox = newParent.absoluteBoundingBox;
+            if (nodeBox && parentBox) {
+                // 保留原始绝对坐标备查
+                node._originalAbsX = nodeBox.x;
+                node._originalAbsY = nodeBox.y;
+                // 写入相对坐标（Figma 节点用 relativeTransform，但我们直接改 x/y 供解析器读取）
+                node._reparentRelX = Math.round(nodeBox.x - parentBox.x);
+                node._reparentRelY = Math.round(nodeBox.y - parentBox.y);
+                console.log(`🔀 [reparent] "${node.name}" (${nodeId}) → 父节点 "${newParent.name}" (${newParentId}), 相对坐标=(${node._reparentRelX},${node._reparentRelY})`);
+            } else {
+                console.warn(`⚠️  [reparent] "${node.name}" 缺少 absoluteBoundingBox，坐标无法自动转换`);
+            }
+
+            // 4. 从原父节点移除
+            if (oldParent?.children) {
+                const idx = oldParent.children.indexOf(node);
+                if (idx !== -1) oldParent.children.splice(idx, 1);
+            } else {
+                // 原父节点是顶层（nodes 数组）
+                const idx = nodes.indexOf(node);
+                if (idx !== -1) nodes.splice(idx, 1);
+            }
+
+            // 5. 插入新父节点（插到末尾）
+            newParent.children.push(node);
+
+            // 6. 更新新父节点的 children_roles（如果 AI 指定了 role）
+            if (role) {
+                const parentTag = tagMap.get(newParentId);
+                if (parentTag) {
+                    if (!parentTag.children_roles) parentTag.children_roles = {};
+                    parentTag.children_roles[nodeId] = role;
+                }
+            }
+
+            // 7. 更新 parentMap
+            parentMap.set(nodeId, newParent);
+        }
+
+        if (reparentTags.length > 0) {
+            console.log(`✅ [reparent] 完成 ${reparentTags.length} 个节点的层级调整`);
+        }
     }
 
     /**
@@ -422,6 +567,14 @@ export class AISemanticTagger {
             '- **含 Mask 的容器**（如带圆角裁剪的卡片）→ 标注为 `Component`，**不要**标注为 `Image`，让代码决定是否 SSR',
             '- **导航菜单项**（图标 + 文字的重复单元）→ 识别为 `Label`，标注 `icon` 和 `title` 子节点',
             '- **选项卡按钮**（横向排列的多个按钮）→ 识别为 `Button`',
+            '',
+            '### 层级调整（reparent）判断',
+            '',
+            '请检查是否存在"层级放错了位置"的节点，典型情况：',
+            '- **弹窗底部按钮栏**：与弹窗 Frame 同级，但 absoluteBoundingBox 在弹窗范围内 → `reparent` 到弹窗',
+            '- **页面内的子面板**：某个 Frame 在视觉上是另一个大 Frame 的一部分，但 Figma 中是兄弟节点 → `reparent` 到大 Frame',
+            '- **判断依据**：看 `w/h/xy` 是否完全落在目标父节点的范围内，且名称语义上有归属关系',
+            '- 不确定时**不要** reparent，保持原始层级，在 risks 中说明',
             '',
             '## System Prompt（规则上下文）',
             '',

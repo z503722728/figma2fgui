@@ -146,21 +146,9 @@ export class ImagePipeline {
                 return;
             }
 
-            // _mergedInto：此节点已被主节点合并渲染，复用主节点的 src（如果已处理）
+            // _mergedInto：此节点已被标注为合并到父节点，不单独下载/渲染
             const mergedInto = (node as any)._mergedInto as string | undefined;
-            if (mergedInto) {
-                const primarySrc = primarySrcMap.get(mergedInto);
-                if (primarySrc) {
-                    // 直接复用主节点图片，不再单独下载
-                    node.src = primarySrc;
-                    node.fileName = allResources.find(r => r.id === primarySrc)
-                        ? 'img/' + allResources.find(r => r.id === primarySrc)!.name
-                        : undefined;
-                    console.log(`🔗 复用合并渲染: "${node.name}" → src=${primarySrc}`);
-                    return;
-                }
-                // 主节点还没处理（顺序问题），继续正常处理，后面会在 matchExistingPngs 阶段处理
-            }
+            if (mergedInto) return;
 
             // _mergeWithParent: 节点本身连同其所有子节点整体作为一张图 SSR（如 grip=圆+图标）
             const isLeaf = (node as any)._mergeWithParent || this.isVisualLeaf(node);

@@ -98,6 +98,8 @@ export interface UINode {
     childrenRoles?: Record<string, string>;
     statePages?: Record<number, string>;
     semanticRisks?: string[];
+    /** reparent 记录：此节点已被移入的父节点 ID（调试用） */
+    _reparentedTo?: string;
 }
 
 export interface ResourceInfo {

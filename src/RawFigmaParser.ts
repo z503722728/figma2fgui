@@ -51,7 +51,11 @@ export class RawFigmaParser {
         let localY: number;
         let rotation = 0;
 
-        if (node.relativeTransform && !isRoot) {
+        // 优先使用 reparent 后计算的相对坐标（由 AISemanticTagger.reparentNodes 写入）
+        if (node._reparentRelX !== undefined && node._reparentRelY !== undefined) {
+            localX = node._reparentRelX;
+            localY = node._reparentRelY;
+        } else if (node.relativeTransform && !isRoot) {
             const a = node.relativeTransform[0][0];
             const c = node.relativeTransform[1][0];
             rotation = Math.round(Math.atan2(c, a) * (180 / Math.PI));
@@ -104,6 +108,8 @@ export class RawFigmaParser {
             _mergeLayers: node._mergeLayers,
             // List item template 名称（AI 标注）
             _listItemTemplateName: node._listItemTemplateName,
+            // reparent 记录（调试用）
+            _reparentedTo: node._reparentedTo,
         };
 
         if (uiNode.type === ObjectType.ProgressBar || uiNode.type === ObjectType.Slider) {

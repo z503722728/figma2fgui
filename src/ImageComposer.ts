@@ -87,16 +87,36 @@ export class ImageComposer {
             }
         });
 
-        // 叠加各图层
-        const overlays = task.layers.map(layer => ({
-            input: layer.filePath,
-            left: Math.max(0, Math.round(layer.offsetX)),
-            top:  Math.max(0, Math.round(layer.offsetY)),
-        }));
+        // 叠加各图层（先读取实际 PNG 尺寸，超出画布范围的裁剪后合成）
+        const overlays: Array<{ input: Buffer | string; left: number; top: number }> = [];
+        for (const layer of task.layers) {
+            const left = Math.max(0, Math.round(layer.offsetX));
+            const top  = Math.max(0, Math.round(layer.offsetY));
+            const maxW = canvasWidth  - left;
+            const maxH = canvasHeight - top;
+            if (maxW <= 0 || maxH <= 0) continue;
+
+            const meta = await sharp(layer.filePath).metadata();
+            const actualW = meta.width  ?? layer.width;
+            const actualH = meta.height ?? layer.height;
+
+            if (actualW > maxW || actualH > maxH) {
+                const cropW = Math.min(actualW, maxW);
+                const cropH = Math.min(actualH, maxH);
+                const buf = await sharp(layer.filePath)
+                    .extract({ left: 0, top: 0, width: cropW, height: cropH })
+                    .png().toBuffer();
+                overlays.push({ input: buf, left, top });
+            } else {
+                overlays.push({ input: layer.filePath, left, top });
+            }
+        }
+
+        console.log(`🔍 [ImageComposer] 画布: ${canvasWidth}×${canvasHeight}, 有效图层: ${overlays.length}/${task.layers.length}`);
 
         composite = composite.composite(overlays);
 
-        // 裁剪
+        // 裁剪到目标尺寸
         if (clip) {
             composite = composite.extract({
                 left:   0,
@@ -160,10 +180,10 @@ export class ImageComposer {
         const clipW  = clipNode.width  * FGUI_SCALE;
         const clipH  = clipNode.height * FGUI_SCALE;
 
-        // 计算画布大小（所有图层的最大范围）
-        let canvasW = clipW;
-        let canvasH = clipH;
-        const layers: ComposeTask['layers'] = [];
+        // 第一遍：计算所有图层的偏移范围，确定画布大小
+        // 注意：偏移量可能为负（图层超出基准节点上/左边界），需要整体平移到正数区域
+        const rawOffsets: Array<{ nodeId: string; ox: number; oy: number; w: number; h: number; filePath: string }> = [];
+        let minOX = 0, minOY = 0, maxOX = clipW, maxOY = clipH;
 
         for (const nodeId of nodeIds) {
             const res = imgResMap.get(nodeId);
@@ -172,23 +192,32 @@ export class ImageComposer {
                 continue;
             }
             const layerNode = allNodes.get(nodeId);
-            const layerX = layerNode ? (layerNode.x * FGUI_SCALE - baseX) : 0;
-            const layerY = layerNode ? (layerNode.y * FGUI_SCALE - baseY) : 0;
-
-            // 如果不裁剪，画布需要足够大
-            if (!clip) {
-                canvasW = Math.max(canvasW, layerX + res.width);
-                canvasH = Math.max(canvasH, layerY + res.height);
-            }
-
-            layers.push({
-                filePath: res.filePath,
-                offsetX: layerX,
-                offsetY: layerY,
-                width:   res.width,
-                height:  res.height,
-            });
+            const ox = layerNode ? (layerNode.x * FGUI_SCALE - baseX) : 0;
+            const oy = layerNode ? (layerNode.y * FGUI_SCALE - baseY) : 0;
+            rawOffsets.push({ nodeId, ox, oy, w: res.width, h: res.height, filePath: res.filePath });
+            minOX = Math.min(minOX, ox);
+            minOY = Math.min(minOY, oy);
+            maxOX = Math.max(maxOX, ox + res.width);
+            maxOY = Math.max(maxOY, oy + res.height);
         }
+
+        if (rawOffsets.length === 0) return null;
+
+        // 平移量：确保所有偏移量 >= 0
+        const shiftX = minOX < 0 ? -minOX : 0;
+        const shiftY = minOY < 0 ? -minOY : 0;
+
+        // 画布大小：clip=true 时用 clipW/H，clip=false 时用所有图层的最大范围
+        const canvasW = clip ? Math.round(clipW) : Math.round(maxOX - minOX);
+        const canvasH = clip ? Math.round(clipH) : Math.round(maxOY - minOY);
+
+        const layers: ComposeTask['layers'] = rawOffsets.map(r => ({
+            filePath: r.filePath,
+            offsetX: r.ox + shiftX,
+            offsetY: r.oy + shiftY,
+            width:   r.w,
+            height:  r.h,
+        }));
 
         if (layers.length === 0) return null;
 

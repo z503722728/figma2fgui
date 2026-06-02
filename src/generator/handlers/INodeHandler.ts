@@ -4,6 +4,10 @@ import { PropertyMapper } from '../../mapper/PropertyMapper';
 export interface GeneratorContext {
     idCounter: number;
     buildId: string;
+    /** 当前组件内已使用的 name 集合（用于去重） */
+    usedNames: Set<string>;
+    /** 父节点的 children_roles 映射：sourceId → 角色名（由 AI 标注） */
+    parentChildrenRoles?: Record<string, string>;
 }
 
 export type NodeGeneratorFn = (

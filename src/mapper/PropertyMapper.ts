@@ -39,7 +39,21 @@ export class PropertyMapper {
         };
 
         if (s.opacity) attr.alpha = s.opacity;
-        if (node.rotation) attr.rotation = node.rotation.toString();
+
+        // 旋转处理：
+        // 接近 ±180° → 转为水平翻转（设计师常用旋转180°来镜像图片）
+        // 接近 ±90°  → 保留旋转（真实旋转，无法简化）
+        // 其他角度   → 直接透传
+        if (node.rotation) {
+            const rot = node.rotation;
+            const absRot = Math.abs(rot);
+            if (absRot >= 170 && absRot <= 190) {
+                // ~180° 旋转 = 水平翻转（FGUI image 的 flip 属性）
+                attr.flip = 'horizontal';
+            } else {
+                attr.rotation = rot.toString();
+            }
+        }
 
         switch (node.type) {
             case ObjectType.Text:

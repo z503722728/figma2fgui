@@ -224,7 +224,14 @@ export class SubComponentExtractor {
             const isCheckOrRadio = isExtensionType &&
                 node.type === ObjectType.Button &&
                 (node.buttonMode === 'Check' || node.buttonMode === 'Radio');
-            const hash = this.calculateStructuralHash(node, isCheckOrRadio);
+            let hash = this.calculateStructuralHash(node, isCheckOrRadio);
+
+            // 💡 AI 明确标注了语义名称（fgui_name/semanticType）的节点，
+            // 将名称加入哈希，防止不同名称的同结构组件被错误合并。
+            // 例如：Btn_ArrowLeft 与 Btn_ArrowRight 结构相同但语义不同，必须各自独立生成。
+            if ((node as any).semanticType && node.name) {
+                hash = JSON.stringify([node.name, hash]);
+            }
 
             if (!this._candidateGroups.has(hash)) {
                 this._candidateGroups.set(hash, []);
