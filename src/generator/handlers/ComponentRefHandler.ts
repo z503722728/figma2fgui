@@ -3,6 +3,14 @@ import { ObjectType } from '../../models/FGUIEnum';
 import { PropertyMapper } from '../../mapper/PropertyMapper';
 import { INodeHandler, GeneratorContext, NodeGeneratorFn } from './INodeHandler';
 
+/** 角色名去重：若已使用则追加数字后缀 */
+function deduplicateName(name: string, usedNames: Set<string>): string {
+    if (!usedNames.has(name)) { usedNames.add(name); return name; }
+    let i = 2;
+    while (usedNames.has(`${name}_${i}`)) i++;
+    const u = `${name}_${i}`; usedNames.add(u); return u;
+}
+
 interface OverrideWriter {
     tagName: string;
     buildAttrs(overrides: Record<string, any>, buildId: string): Record<string, any>;
@@ -77,7 +85,11 @@ export class ComponentRefHandler implements INodeHandler {
         context: GeneratorContext, mapper: PropertyMapper, _generateNodeXml: NodeGeneratorFn
     ): boolean {
         const assignedId = `n${context.idCounter++}`;
-        const attrs = mapper.mapAttributes(node, assignedId);
+        const roleName = context.parentChildrenRoles?.[node.sourceId ?? ''];
+        const semanticName = roleName
+            ? deduplicateName(roleName, context.usedNames)
+            : assignedId;
+        const attrs = mapper.mapAttributes(node, assignedId, semanticName);
         this.populateAttributes(node, attrs, buildId);
         const compEle = parentEle.ele(this.getElementName(node), attrs);
         this.writeOverrides(node, compEle, buildId);

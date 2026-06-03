@@ -21,7 +21,7 @@ export class PropertyMapper {
         }
     }
 
-    public mapAttributes(node: UINode, assignedId?: string): Record<string, string> {
+    public mapAttributes(node: UINode, assignedId?: string, semanticName?: string): Record<string, string> {
         const s = node.styles;
         const isIconLoader = node.name === 'icon' && node.type === ObjectType.Loader && node.src;
         const padding = (node.src && !isIconLoader) ? getVisualPadding(node) : 0;
@@ -31,9 +31,21 @@ export class PropertyMapper {
         const w = (parseFloat(s.width || node.width.toString()) + padding * 2) * FGUI_SCALE;
         const h = (parseFloat(s.height || node.height.toString()) + padding * 2) * FGUI_SCALE;
 
+        // name 优先级：
+        // 1. semanticName（来自父节点 childrenRoles 的角色名，已去重）
+        // 2. 节点自身已有语义名（title / icon 等 FGUI 必需角色名）
+        // 3. assignedId（n0/n1/n2...，无意义的自增 ID）
+        const FGUI_REQUIRED_ROLES = new Set(['title', 'icon', 'bar', 'grip']);
+        const hasSemanticSelfName = FGUI_REQUIRED_ROLES.has(node.name ?? '');
+        const finalName = semanticName
+            ?? (hasSemanticSelfName ? node.name : undefined)
+            ?? assignedId
+            ?? node.name
+            ?? 'n0';
+
         const attr: Record<string, string> = {
             id: assignedId || node.id || 'n' + Math.random().toString(36).substring(2, 5),
-            name: (assignedId && node.name !== 'title' && node.name !== 'icon') ? assignedId : (node.name || 'n0'),
+            name: finalName,
             xy: `${Math.round(x)},${Math.round(y)}`,
             size: `${Math.round(w)},${Math.round(h)}`
         };

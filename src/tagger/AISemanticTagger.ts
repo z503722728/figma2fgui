@@ -41,6 +41,24 @@ export interface NodeSemanticTag {
      */
     list_item_template?: string;
     /**
+     * List 组件的 item template 节点 ID（精确指定，优先于 list_item_template 名称查找）。
+     * 当 item template 节点不是 list 的直接子节点时，用此字段精确定位。
+     */
+    list_item_node_id?: string;
+    /**
+     * List item 变体图层：同一个组件有多种视觉变体（如不同颜色），
+     * 用 state controller + gearDisplay 控制哪一张 bg 显示。
+     *
+     *   controller = FGUI controller 名称（通常是 "state"）
+     *   role       = 变体图层在组件内的角色名（如 "bg"）
+     *   pages      = 各变体：index（页码）、name（页名）、node_id（Figma 节点 ID）
+     */
+    variant_layers?: {
+        controller: string;
+        role: string;
+        pages: Array<{ index: number; name: string; node_id: string }>;
+    };
+    /**
      * 节点重新挂载（层级调整）：
      *   new_parent = 目标父节点 ID（此节点将从当前位置移入该父节点）
      *   role       = 在新父节点中的角色名（写入新父节点的 children_roles）
@@ -399,6 +417,14 @@ export class AISemanticTagger {
                 // list_item_template：List 组件的 item template 名称
                 if (tag.list_item_template) {
                     node._listItemTemplateName = tag.list_item_template;
+                }
+                // list_item_node_id：精确指定 template 节点 ID
+                if (tag.list_item_node_id) {
+                    node._listItemNodeId = tag.list_item_node_id;
+                }
+                // variant_layers：多变体图层（state controller + gearDisplay）
+                if (tag.variant_layers) {
+                    node._variantLayers = tag.variant_layers;
                 }
                 // reparent 标记（已在步骤 1 处理，这里只记录日志用）
                 if (tag.reparent) {

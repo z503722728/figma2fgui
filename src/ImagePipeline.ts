@@ -151,23 +151,35 @@ export class ImagePipeline {
             if (mergedInto) return;
 
             // _mergeWithParent: 节点本身连同其所有子节点整体作为一张图 SSR（如 grip=圆+图标）
-            const isLeaf = (node as any)._mergeWithParent || this.isVisualLeaf(node);
+            // 💡 有 _variantLayers 的节点不能整体 SSR，需要展开子节点处理各变体
+            const hasVariantLayers = !!(node as any)._variantLayers;
+            const isLeaf = !hasVariantLayers && ((node as any)._mergeWithParent || this.isVisualLeaf(node));
             if (isLeaf) {
                 const res = this.enqueue(node);
                 allResources.push(res);
                 node.src = res.id;
                 node.fileName = 'img/' + res.name;
                 if (node.multiLooks) this.enqueueMultiLooks(node, res.id, allResources);
-                // 合并节点：子节点不再单独扫描，清空以防 XMLGenerator 展开
                 if ((node as any)._mergeWithParent && node.children?.length) {
                     node.children = [];
                 }
-                // 记录主节点的 src，供被合并节点复用
                 if ((node as any)._mergedNodes?.length) {
                     primarySrcMap.set(node.sourceId || node.id, res.id);
                 }
                 return;
             }
+
+            // 💡 Loader + gearIcon + multiLooks（variant_layers 生成的 bg 节点）：
+            // 没有 src 也没有子节点，需要入队 page 0 并触发 enqueueMultiLooks 下载各变体图
+            if (node.type === ObjectType.Loader && node.multiLooks && !node.src && !node.children?.length) {
+                const res = this.enqueue(node);
+                allResources.push(res);
+                node.src = res.id;
+                node.fileName = 'img/' + res.name;
+                this.enqueueMultiLooks(node, res.id, allResources);
+                return;
+            }
+
             if (node.children) node.children.forEach(visit);
         };
         nodes.forEach(visit);
@@ -191,8 +203,7 @@ export class ImagePipeline {
         const gear = node.gears?.find(g => g.type === 'gearIcon');
         if (gear) {
             const isButton = gear.controller === 'button';
-            if (isButton) {
-                const onResId  = pageIds.map(p => lookResMap[p]).find(r => r && r !== baseResId) || baseResId;
+            if (isButton) {                const onResId  = pageIds.map(p => lookResMap[p]).find(r => r && r !== baseResId) || baseResId;
                 const offResId = baseResId;
                 if (onResId !== offResId) {
                     // Check Button（off/on 两态）：4页布局 → up=off, down=on, over=off, selectedOver=on
@@ -211,10 +222,10 @@ export class ImagePipeline {
         }
     }
 
-    public async execute(): Promise<void> {
+    public async execute(): Promise<Set<string>> {
         if (this.queue.length === 0) {
             console.log('🖼️ ImagePipeline: No images to process.');
-            return;
+            return new Set();
         }
 
         await fs.ensureDir(this.imgDir);
@@ -236,7 +247,7 @@ export class ImagePipeline {
 
         if (itemsToProcess.length === 0) {
             console.log('✅ ImagePipeline: All images are cached.');
-            return;
+            return new Set<string>();
         }
 
         // ─── 情况 A 去重：相同 fileName 不同 sourceId ────────────────────────────
@@ -293,8 +304,12 @@ export class ImagePipeline {
 
         console.log(`⬇️ ImagePipeline: Downloading ${downloadTasks.length} images (concurrency=${this.CONCURRENCY})...`);
         await parallelLimit(downloadTasks, this.CONCURRENCY);
-        await this.saveManifest(itemsToProcess); // 仍用原始完整列表写 manifest，保证缓存命中
+        await this.saveManifest(itemsToProcess);
         console.log(`✅ ImagePipeline: Done. ${downloadTasks.length} images downloaded.`);
+
+        // 返回所有未能获取 URL 的 sourceId（下载失败的资源）
+        const failedSourceIds = new Set<string>(missing.map(i => i.sourceId));
+        return failedSourceIds;
     }
 
     private isVisualLeaf(node: UINode): boolean {

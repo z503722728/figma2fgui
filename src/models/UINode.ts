@@ -72,6 +72,17 @@ export interface UINode {
     listItemTemplate?: string;
     /** AI 标注的 list item template 名称（用于从子节点中找 template，传给 SubComponentExtractor）*/
     _listItemTemplateName?: string;
+    /** AI 标注的 list item template 节点 ID（精确定位，优先于名称查找）*/
+    _listItemNodeId?: string;
+    /**
+     * 多变体图层：同一组件有多种视觉变体（如颜色不同），
+     * 生成时插入多张 bg 子节点，用 state controller + gearDisplay 控制显隐。
+     */
+    _variantLayers?: {
+        controller: string;
+        role: string;
+        pages: Array<{ index: number; name: string; node_id: string }>;
+    };
     /**
      * Button 模式：Common（普通）| Check（复选/Toggle）| Radio（单选）
      * 对应 FGUI XML: <Button mode="Check"/>

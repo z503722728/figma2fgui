@@ -61,6 +61,79 @@ export class SubComponentExtractor {
             this.analyzeMultiLooks(canonical, instances);
         }
 
+        // ── 第一轮：仅提取 List template（必须在 transform 之前，否则 children 变成 refNode）──
+        for (const [hash, instances] of this._candidateGroups.entries()) {
+            const canonical = instances[0];
+            const cachedRes = this._componentCache.get(hash)!;
+            if (canonical.type !== ObjectType.List) continue;
+            const cleanNode = this.stripParent(canonical);
+            cleanNode.extention = 'List';
+
+            const templateName   = (cleanNode as any)._listItemTemplateName as string | undefined;
+            const templateNodeId = (cleanNode as any)._listItemNodeId as string | undefined;
+
+            // 优先从全局缓存按名称查找
+            let foundInCache: ResourceInfo | undefined;
+            if (templateName) {
+                for (const res of this._newResources) {
+                    if (res.name === templateName) { foundInCache = res; break; }
+                }
+            }
+
+            let listItemTemplate: string | undefined;
+            if (foundInCache) {
+                listItemTemplate = foundInCache.id;
+                console.log(`📋 List "${cleanNode.name}" → 全局 template: "${foundInCache.name}" (${foundInCache.id})`);
+            } else if (cleanNode.children?.length) {
+                // 按 sourceId 深层查找
+                let templateChild: UINode | undefined;
+                if (templateNodeId) {
+                    const findById = (nodes: UINode[]): UINode | undefined => {
+                        for (const n of nodes) {
+                            if (n.sourceId === templateNodeId || n.id === templateNodeId) return n;
+                            const found = findById(n.children || []);
+                            if (found) return found;
+                        }
+                        return undefined;
+                    };
+                    templateChild = findById(cleanNode.children);
+                    if (templateChild) console.log(`📋 List "${cleanNode.name}" → 精确定位 template: "${templateChild.name}" (${templateNodeId})`);
+                }
+                if (!templateChild) {
+                    templateChild = templateName
+                        ? (cleanNode.children.find(c => c.name === templateName) || cleanNode.children[0])
+                        : cleanNode.children[0];
+                }
+                if (templateChild) {
+                    const templateHash = this.calculateStructuralHash(templateChild);
+                    const existingRes = this._componentCache.get(templateHash);
+                    if (existingRes) {
+                        listItemTemplate = existingRes.id;
+                        console.log(`📋 List "${cleanNode.name}" → 复用 template: "${existingRes.name}"`);
+                    } else {
+                        const templateResId = `comp_tmpl_${this._nextCompId++}`;
+                        const safeName = (templateName || templateChild.name).replace(/\s+/g, '');
+                        const strippedTemplate = this.stripParent(templateChild);
+                        this.applyVariantLayers(strippedTemplate);
+                        const templateRes: ResourceInfo = {
+                            id: templateResId, name: safeName, type: 'component',
+                            data: JSON.stringify({ ...strippedTemplate, _isListItem: true })
+                        };
+                        this._componentCache.set(templateHash, templateRes);
+                        this._newResources.push(templateRes);
+                        listItemTemplate = templateResId;
+                        console.log(`📋 List "${cleanNode.name}" → 新 template: "${safeName}" (${templateResId})`);
+                    }
+                }
+            }
+
+            if (listItemTemplate) {
+                canonical.listItemTemplate = listItemTemplate;
+                (cachedRes as any)._pendingListItemTemplate = listItemTemplate;
+            }
+        }
+
+        // ── transform ────────────────────────────────────────────────────────────────
         for (const group of this._candidateGroups.values()) {
             for (const inst of group) {
                 this.transformTreeRecursive(inst);
@@ -72,10 +145,12 @@ export class SubComponentExtractor {
             this.detectAndApplyStates(root);
         }
 
+        // ── 第二轮：完整序列化（transform 后 children 已是 refNode，子组件引用正确）──
         for (const [hash, instances] of this._candidateGroups.entries()) {
             const canonical = instances[0];
             const cachedRes = this._componentCache.get(hash)!;
             const cleanNode = this.stripParent(canonical);
+            this.transformTreeRecursive(cleanNode); // 对 cleanNode 副本也做 transform
 
             const extensionMap: Record<number, string> = {
                 [ObjectType.Button]: 'Button',
@@ -91,9 +166,6 @@ export class SubComponentExtractor {
             }
 
             // ─── 组件级 multiLooks 分发 ──────────────────────────────────────────
-            // Check Button 已在 analyzeMultiLooks 阶段将 multiLooks 下移到各子节点，
-            // cleanNode.multiLooks 此时为空，直接跳过。
-            // 普通 Button / Label 等：multiLooks 在组件级，分发给 icon 或 bar 子节点。
             if (cleanNode.multiLooks && cleanNode.children) {
                 const isCheckBtn = cleanNode.buttonMode === 'Check' || cleanNode.buttonMode === 'Radio';
                 const variantChild = isCheckBtn
@@ -121,53 +193,35 @@ export class SubComponentExtractor {
                 }
             }
 
-            // ─── List 组件：提取 item template 为独立组件 ─────────────────────────
-            // AI 通过 list_item_template 指定模板名称；如果没有则取第一个子节点。
-            // 提取后 List 自身不再展开子节点，由 defaultItem 引用 template。
-            if (cleanNode.extention === 'List' && cleanNode.children?.length) {
-                const templateName = (cleanNode as any)._listItemTemplateName;
+            // ─── variant_layers：多变体图层（state controller + gearIcon 换图） ────
+            if ((cleanNode as any)._variantLayers) {
+                this.applyVariantLayers(cleanNode);
+            }
 
-                // 优先从全局组件缓存里按名称查找已提取的 template（如 GachaItem）
-                let foundInCache: ResourceInfo | undefined;
-                if (templateName) {
-                    for (const res of this._newResources) {
-                        if (res.name === templateName) { foundInCache = res; break; }
-                    }
+            // ─── List 组件：使用第一轮提取的 template，清空子节点 ─────────────────
+            if (cleanNode.extention === 'List') {
+                const pending = (cachedRes as any)._pendingListItemTemplate;
+                if (pending) {
+                    cleanNode.listItemTemplate = pending;
                 }
+                cleanNode.children = [];
+            }
 
-                if (foundInCache) {
-                    cleanNode.listItemTemplate = foundInCache.id;
-                    console.log(`📋 List "${cleanNode.name}" → 全局 template: "${foundInCache.name}" (${foundInCache.id})`);
-                } else {
-                    // 回退：在直接子节点里找（按名称，否则取第一个）
-                    const templateChild = templateName
-                        ? (cleanNode.children.find(c => c.name === templateName) || cleanNode.children[0])
-                        : cleanNode.children[0];
-
-                    if (templateChild) {
-                        const templateHash = this.calculateStructuralHash(templateChild);
-                        const existingRes = this._componentCache.get(templateHash);
-                        if (existingRes) {
-                            cleanNode.listItemTemplate = existingRes.id;
-                            console.log(`📋 List "${cleanNode.name}" → 复用 template: "${existingRes.name}"`);
-                        } else {
-                            const templateResId = `comp_tmpl_${this._nextCompId++}`;
-                            const safeName = (templateName || templateChild.name).replace(/\s+/g, '');
-                            const strippedTemplate = this.stripParent(templateChild);
-                            const templateRes: ResourceInfo = {
-                                id: templateResId,
-                                name: safeName,
-                                type: 'component',
-                                data: JSON.stringify({ ...strippedTemplate, _isListItem: true })
-                            };
-                            this._componentCache.set(templateHash, templateRes);
-                            this._newResources.push(templateRes);
-                            cleanNode.listItemTemplate = templateResId;
-                            console.log(`📋 List "${cleanNode.name}" → 新 template: "${safeName}" (${templateResId})`);
+            // 对 cleanNode.children 里的 List 子节点补全 listItemTemplate
+            // （此时 List 自身已在前面的迭代里序列化完成，cachedRes.data 里有 listItemTemplate）
+            if (cleanNode.children?.length) {
+                for (const child of cleanNode.children) {
+                    if (child.type === ObjectType.List && child.asComponent) {
+                        const childHash = child._structuralHash || this.calculateStructuralHash(child);
+                        const childRes = this._componentCache.get(childHash);
+                        if (childRes?.data) {
+                            try {
+                                const childData = JSON.parse(childRes.data);
+                                if (childData.listItemTemplate) child.listItemTemplate = childData.listItemTemplate;
+                            } catch {}
                         }
                     }
                 }
-                cleanNode.children = [];
             }
 
             cachedRes.data = JSON.stringify(cleanNode);
@@ -288,8 +342,21 @@ export class SubComponentExtractor {
                         fileName: compRes.name + '.xml',
                         asComponent: true,
                         visible: child.visible,
-                        overrides: this.extractOverrides(child)
+                        overrides: this.extractOverrides(child),
+                        childrenRoles: child.childrenRoles,
                     };
+                    // List 节点：从 canonical.listItemTemplate 取（第一轮已写入），供 ListHandler 内联生成
+                    if (child.type === ObjectType.List) {
+                        // 优先用 canonical 上直接设置的值（第一轮写入）
+                        if (child.listItemTemplate) {
+                            refNode.listItemTemplate = child.listItemTemplate;
+                        } else if (compRes.data) {
+                            try {
+                                const d = JSON.parse(compRes.data);
+                                if (d.listItemTemplate) refNode.listItemTemplate = d.listItemTemplate;
+                            } catch {}
+                        }
+                    }
                     const activePage = this.extractInstanceActiveState(child);
                     if (activePage > 0) {
                         refNode.overrides = refNode.overrides || {};
@@ -677,5 +744,59 @@ export class SubComponentExtractor {
         const state = findVisibleState(instanceNode);
         if (state && buttonPageMap[state] !== undefined) return buttonPageMap[state];
         return 0;
+    }
+
+    /**
+     * 处理 _variantLayers：将多变体通过 state controller + gearIcon 换图实现。
+     * bg 子节点改为 Loader，加 gearIcon + multiLooks；其他含子节点的子节点整体 SSR。
+     */
+    private applyVariantLayers(node: UINode): void {
+        const vl = (node as any)._variantLayers as {
+            controller: string;
+            role: string;
+            pages: Array<{ index: number; name: string; node_id: string }>;
+        } | undefined;
+        if (!vl?.pages?.length) return;
+
+        const ctrlName = vl.controller || 'state';
+        const role     = vl.role || 'bg';
+
+        // 添加 state controller
+        const ctrlPages = vl.pages.flatMap(p => [p.index.toString(), p.name]).join(',');
+        node.controllers = node.controllers || [];
+        if (!node.controllers.find((c: any) => c.name === ctrlName)) {
+            node.controllers.push({ name: ctrlName, pages: ctrlPages });
+        }
+
+        // 找 bg 子节点
+        let bgChild = node.children?.find((c: UINode) => c.name === role);
+        if (!bgChild && node.children?.length) {
+            bgChild = node.children.find((c: UINode) =>
+                c.type === ObjectType.Image || c.type === ObjectType.Loader || c.type === ObjectType.Graph
+            );
+        }
+        if (!bgChild) {
+            console.warn(`⚠️  [VariantLayers] "${node.name}" 未找到 role="${role}" 的子节点`);
+            return;
+        }
+
+        bgChild.type = ObjectType.Loader;
+        bgChild.name = role;
+        // 把 bgChild 的 sourceId 指向 pages[0] 的节点（供 matchExistingPngs 匹配缓存）
+        bgChild.sourceId = vl.pages[0]?.node_id || bgChild.sourceId;
+        bgChild.gears = bgChild.gears || [];
+        bgChild.gears.push({
+            type: 'gearIcon', controller: ctrlName,
+            pages: vl.pages.map(p => p.index).join(','), values: '',
+        });
+        bgChild.multiLooks = {};
+        vl.pages.forEach(p => { bgChild!.multiLooks![p.index] = { sourceId: p.node_id }; });
+
+        // 其他含子节点的子节点整体 SSR
+        node.children?.forEach((c: UINode) => {
+            if (c !== bgChild && c.children?.length) (c as any)._mergeWithParent = true;
+        });
+
+        console.log(`🎨 [VariantLayers] "${node.name}" role="${role}" ${vl.pages.length} 变体 → state+gearIcon`);
     }
 }

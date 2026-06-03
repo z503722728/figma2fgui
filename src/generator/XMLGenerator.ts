@@ -24,7 +24,9 @@ export class XMLGenerator {
         extention?: string,
         controllers?: any[],
         buttonMode?: string,
-        listItemTemplate?: string
+        listItemTemplate?: string,
+        /** 父节点的 childrenRoles，用于给直接子节点赋予语义名 */
+        parentChildrenRoles?: Record<string, string>
     ): string {
         const component = xmlbuilder.create('component').att('size', `${width * FGUI_SCALE},${height * FGUI_SCALE}`);
         if (extention) component.att('extention', extention);
@@ -32,7 +34,6 @@ export class XMLGenerator {
         if (extention === 'Button') {
             this._registry.getButtonHandler().writeButtonPreamble(component, buttonMode);
         } else if (extention === 'List') {
-            // List 组件：<List defaultItem="ui://..." layout="FlowH" overflow="scroll"/>
             const listAttrs: Record<string, string> = { layout: 'FlowH', overflow: 'scroll' };
             if (listItemTemplate) {
                 listAttrs.defaultItem = `ui://${buildId}${listItemTemplate}`;
@@ -43,7 +44,12 @@ export class XMLGenerator {
         }
 
         const displayList = component.ele('displayList');
-        const context: GeneratorContext = { idCounter: 0, buildId };
+        const context: GeneratorContext = {
+            idCounter: 0,
+            buildId,
+            usedNames: new Set(),
+            parentChildrenRoles: parentChildrenRoles ?? {},
+        };
 
         if (rootStyles) this.injectBackground(rootStyles, width * FGUI_SCALE, height * FGUI_SCALE, displayList, context);
 
@@ -66,22 +72,59 @@ export class XMLGenerator {
         }
 
         const assignedId = `n${context.idCounter++}`;
-        const attrs = this._mapper.mapAttributes(node, assignedId);
+
+        // ── 语义命名：优先使用父节点 childrenRoles 里的角色名 ──────────────────
+        const roleName = context.parentChildrenRoles?.[node.sourceId ?? ''];
+        const semanticName = roleName
+            ? this.deduplicateName(roleName, context.usedNames)
+            : assignedId;
+
+        // 子节点生成时，把本节点的 childrenRoles 传入 context
+        const childContext: GeneratorContext = {
+            ...context,
+            parentChildrenRoles: node.childrenRoles ?? {},
+        };
+
+        const attrs = this._mapper.mapAttributes(node, assignedId, semanticName);
         handler.populateAttributes(node, attrs, buildId);
         const eleName = handler.getElementName(node);
+
+        // handler.handleNode 使用 childContext（让子节点能查到本节点的 childrenRoles）
+        if (handler.handleNode) {
+            const handled = handler.handleNode(
+                node, parentEle, buildId, childContext, this._mapper,
+                (n, p, b, c) => this.generateNodeXml(n, p, b, c)
+            );
+            if (handled) return;
+        }
+
         const nodeEle = parentEle.ele(eleName, attrs);
 
         if (handler.writeOverrides) handler.writeOverrides(node, nodeEle, buildId);
 
-        // gear 输出：handler 自定义 > ButtonHandler（当节点有 button gear 类型时）> 默认
+        // gear 输出
         if (handler.writeGears) {
             handler.writeGears(node, nodeEle, buildId);
         } else if (node.gears?.some(g => ['gearDisplay', 'gearXY'].includes(g.type))) {
-            // 子节点含 button controller 专用 gear → 用 ButtonHandler 输出
             this._registry.getButtonHandler().writeGears(node, nodeEle, buildId);
         } else {
             this.writeGearsDefault(node, nodeEle, buildId);
         }
+    }
+
+    /**
+     * 角色名去重：若 name 已在 usedNames 中，追加数字后缀（_2/_3...）直到唯一。
+     */
+    private deduplicateName(name: string, usedNames: Set<string>): string {
+        if (!usedNames.has(name)) {
+            usedNames.add(name);
+            return name;
+        }
+        let i = 2;
+        while (usedNames.has(`${name}_${i}`)) i++;
+        const unique = `${name}_${i}`;
+        usedNames.add(unique);
+        return unique;
     }
 
     /** 默认 gear 输出（非 Button 节点使用） */

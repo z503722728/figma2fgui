@@ -285,9 +285,17 @@ export async function run(opts: RunOptions): Promise<void> {
                     matchExistingPngs([compRootFn]);
                     pipeline.scanAndEnqueue([compRootFn], allResources);
                 } else if (isListItem) {
-                    (compRootFn as any)._mergeWithParent = true;
-                    matchExistingPngs([compRootFn]);
-                    pipeline.scanAndEnqueue([compRootFn], allResources);
+                    // List item template：
+                    // 有 _variantLayers → 保留子节点，走正常扫描流程（bg 子节点各自下载）
+                    // 无 _variantLayers → 整体 SSR 成一张图
+                    if ((compRootFn as any)._variantLayers) {
+                        matchExistingPngs([compRootFn]);
+                        pipeline.scanAndEnqueue([compRootFn], allResources);
+                    } else {
+                        (compRootFn as any)._mergeWithParent = true;
+                        matchExistingPngs([compRootFn]);
+                        pipeline.scanAndEnqueue([compRootFn], allResources);
+                    }
                 } else {
                     console.log(`⏭️ 跳过纯形状组件: ${res.name}`);
                 }
@@ -302,9 +310,46 @@ export async function run(opts: RunOptions): Promise<void> {
     await fs.ensureDir(imgDir);
 
     // ─── 5. 下载图片 ──────────────────────────────────────────────────────────────
-    await pipeline.execute();
+    const failedSourceIds = await pipeline.execute();
 
-    // ─── 5.5 merge_layers 合图功能已移除，由用户在 FGUIProject 中手动处理 ─────────
+    // 下载失败的资源：从 allResources 移除，同时把引用它们的节点 src 置空（避免 XML 引用不存在的资源）
+    if (failedSourceIds.size > 0) {
+        const failedResIds = new Set<string>();
+        for (let i = allResources.length - 1; i >= 0; i--) {
+            const r = allResources[i];
+            if (r.type === 'image' && r._sourceId && failedSourceIds.has(r._sourceId)) {
+                failedResIds.add(r.id);
+                allResources.splice(i, 1);
+                console.warn(`🗑️  已移除失败资源: ${r.name} (${r._sourceId})`);
+            }
+        }
+        // 把引用了失败资源的节点 src 置空
+        const clearFailedSrc = (node: UINode) => {
+            if (node.src && failedResIds.has(node.src)) {
+                console.warn(`🔗 节点 "${node.name}" 引用了失败资源 ${node.src}，已置空`);
+                node.src = undefined;
+                node.fileName = undefined;
+            }
+            node.children?.forEach(clearFailedSrc);
+        };
+        rootNodes.forEach(clearFailedSrc);
+        extractedNodesMap.forEach(n => clearFailedSrc(n));
+        // 重新序列化受影响的组件节点
+        extractedNodesMap.forEach((node, resId) => {
+            const res = componentResources.find(r => r.id === resId);
+            if (res) res.data = JSON.stringify(node);
+        });
+    }
+
+    // ─── 5.5 下载后重新序列化组件节点（gearIcon.values 在下载后才被填充）────────────
+    componentResources.forEach(res => {
+        const node = extractedNodesMap.get(res.id);
+        if (node && res.type === 'component') {
+            res.data = JSON.stringify(node);
+        }
+    });
+
+    // ─── 5.6 merge_layers 合图功能已移除，由用户在 FGUIProject 中手动处理 ─────────
 
     // Package ID: prefix + MD5(nodeId)[0:length]，来自 pipeline-config.json
     const idSeed = FIGMA_NODE_ID || 'CloudPackage';
@@ -338,7 +383,8 @@ export async function run(opts: RunOptions): Promise<void> {
                 compNode.children || [], buildId,
                 compNode.width, compNode.height,
                 compNode.styles, compNode.extention, compNode.controllers,
-                compNode.buttonMode, compNode.listItemTemplate
+                compNode.buttonMode, compNode.listItemTemplate,
+                compNode.childrenRoles   // 传入父组件的 childrenRoles，子节点得到语义名
             );
             await fs.writeFile(path.join(packagePath, safeName + '.xml'), xmlContent);
             res.name = safeName;
@@ -356,7 +402,8 @@ export async function run(opts: RunOptions): Promise<void> {
             node.children || [], buildId,
             node.width, node.height,
             node.styles, undefined, node.controllers,
-            node.buttonMode
+            node.buttonMode, undefined,
+            node.childrenRoles   // 传入根节点的 childrenRoles
         );
         await fs.writeFile(path.join(packagePath, `${safeName}.xml`), xmlContent);
         if (!processedNames.has(safeName)) {
@@ -374,6 +421,12 @@ export async function run(opts: RunOptions): Promise<void> {
     const uniqueImages = allResources.filter(r => {
         if (r.type !== 'image') return false;
         if (seenImageIds.has(r.id)) return false;
+        // 过滤掉实际文件不存在的图片（下载失败 / 404）
+        const filePath = path.join(imgDir, r.name);
+        if (!fs.existsSync(filePath)) {
+            console.warn(`⚠️  跳过不存在的图片资源: ${r.name}（已从 package.xml 排除）`);
+            return false;
+        }
         seenImageIds.add(r.id); return true;
     });
     const finalResources = [...validResources, ...uniqueImages];

@@ -44,6 +44,11 @@ export class HandlerRegistry {
     }
 
     getHandler(node: UINode): INodeHandler {
+        // List 节点：即使被提取为组件（asComponent+src），也直接内联生成 <list>，
+        // 不走 ComponentRefHandler（避免生成多余的中间 list_xxx.xml 引用）
+        if (node.type === ObjectType.List) {
+            return this._handlers.get(ObjectType.List)!;
+        }
         if (node.asComponent && node.src) return this._componentRefHandler;
         return this._handlers.get(node.type) || this._handlers.get(ObjectType.Graph)!;
     }

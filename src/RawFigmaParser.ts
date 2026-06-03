@@ -108,6 +108,10 @@ export class RawFigmaParser {
             _mergeLayers: node._mergeLayers,
             // List item template 名称（AI 标注）
             _listItemTemplateName: node._listItemTemplateName,
+            // List item template 节点 ID（AI 标注，精确定位）
+            _listItemNodeId: node._listItemNodeId,
+            // 多变体图层（AI 标注）
+            _variantLayers: node._variantLayers,
             // reparent 记录（调试用）
             _reparentedTo: node._reparentedTo,
         };
