@@ -1,12 +1,28 @@
-# design2fgui
+# design2fgui — Figma → FairyGUI AI 驱动转换引擎
 
-**Figma 设计稿 → FairyGUI (FGUI) UI 包** 一键转换工具。
+将 Figma 云端设计稿转换为 FairyGUI (FGUI) 工程包。粘贴一个 Figma 链接，AI 协助完成语义标注，自动输出可直接导入 FairyGUI 编辑器的 XML 包。
 
-粘贴一个 Figma 链接，自动完成：节点解析 → AI 语义标注 → 图片下载 → XML 生成。
+> **旧版（纯 CLI 规则模式）** 保存在 [`legacy-cli` 分支](../../tree/legacy-cli)。
 
 ---
 
-## 快速开始
+## 🆕 相比旧版的核心升级
+
+| 能力 | 旧版（legacy-cli） | 新版（本分支） |
+|---|---|---|
+| 语义标注 | 关键词规则匹配 | **AI 语义标注**（IDE AI 或 API） |
+| 节点命名 | `Frame_24` 等机械名 | `btn_ClaimAll`、`nav_Panel` 等语义名 |
+| 背景识别 | 关键词推断 | 精确配置 + 尺寸校验双重防御 |
+| Image 处理 | 展开子节点 | **强制整体 SSR**，不生成空壳 XML |
+| List 处理 | 生成独立 XML | **直接内联 `<list>`**，无空壳文件 |
+| Label 复用 | 每个独立生成 | **同结构合并，title 通过 override 覆盖** |
+| 截断检测 | 无提示 | Prompt 顶部警告表格 + 补全指引 |
+| 自检简报 | 无 | `✅ 自检通过` 或列出异常项 |
+| 分析/转换分离 | 单步 | `analyze` → 标注 → `convert-only` 两步 |
+
+---
+
+## 🚀 快速开始
 
 ### 1. 安装依赖
 
@@ -16,265 +32,240 @@ bun install
 
 ### 2. 配置 Token
 
-复制 `.env.example` 为 `.env`，填入 Figma Personal Access Token：
-
-```bash
-cp .env.example .env
-```
-
 ```ini
 # .env
 FIGMA_TOKEN=figd_your_personal_access_token   # 必填
 OUTPUT_PATH=./FGUIProject/assets              # 输出目录（可选）
 ```
 
-> 获取 Token：[Figma Settings → Personal access tokens](https://www.figma.com/settings) → Generate new token（权限选 File content: Read-only）
+> 获取 Token：[Figma Settings → Personal access tokens](https://www.figma.com/settings) → Generate new token（权限：File content: Read-only）
 
-### 3. 粘贴 Figma 链接，一键转换
+### 3. 一键分析 + 标注 + 转换
+
+**方式 A：IDE AI 手动标注（推荐，无需 API Key）**
 
 ```bash
-bun run convert "https://www.figma.com/design/MkXcjtn8mj33vXj0eoOr7u/GameUI?node-id=1-1083"
+# 第一步：生成摘要 + 截图
+bun src/analyze.ts "https://www.figma.com/design/{fileKey}/name?node-id=88-3805"
+
+# 第二步：IDE AI 读取 ai_input_prompt.md，生成 semantic_tags.json 和 project-rules.json
+
+# 第三步：执行转换
+bun src/convert-only.ts "https://www.figma.com/design/{fileKey}/name?node-id=88-3805"
 ```
 
-转换完成后，把输出目录导入 FairyGUI 编辑器即可。
+**方式 B：纯规则模式（无需标注）**
+
+```bash
+bun src/convert-only.ts "https://www.figma.com/design/{fileKey}/name?node-id=88-3805"
+```
 
 ---
 
-## 用法详解
-
-### 命令格式
-
-```bash
-bun run convert <figma_url> [output_path]
-```
-
-| 参数 | 说明 |
-|---|---|
-| `figma_url` | Figma 设计稿链接（必填） |
-| `output_path` | FGUI 包输出目录（可选，默认读 `.env` 的 `OUTPUT_PATH`） |
-
-### 示例
-
-```bash
-# 转换指定节点
-bun run convert "https://www.figma.com/design/abc123/GameUI?node-id=88-3805"
-
-# 指定输出目录
-bun run convert "https://www.figma.com/design/abc123/GameUI?node-id=88-3805" ./output
-
-# 转换整个文件（不指定 node-id）
-bun run convert "https://www.figma.com/design/abc123/GameUI"
-```
-
-### 支持的 Figma URL 格式
+## 📋 完整流程说明
 
 ```
-https://www.figma.com/design/{fileKey}/{name}?node-id={nodeId}
-https://www.figma.com/file/{fileKey}/{name}?node-id={nodeId}
-https://www.figma.com/proto/{fileKey}/{name}?node-id={nodeId}
+bun src/analyze.ts <url>
+        ↓
+  下载 Figma 节点数据 + 节点预览截图（thumbnail.png）
+  生成 ai_input_prompt.md（含截断警告表格）
+        ↓
+  [IDE AI 读取 prompt]
+  若有截断警告 → 查询 figma_debug.json 补全缺失节点
+        ↓
+  生成 project-rules.json   ← 背景节点名、类型关键词覆盖等
+  生成 semantic_tags.json   ← 每个节点的语义类型、fgui_name、children_roles
+        ↓
+bun src/convert-only.ts <url>
+        ↓
+  读取标注文件 → 解析 → 提取子组件 → 下载图片 → 生成 XML
+        ↓
+  📊 生成简报：N 个组件 XML，M 张图片资源
+     ✅ 自检通过，无异常
 ```
-
-> `node-id` 参数中的 `-`（如 `1-1083`）会自动转换为 Figma API 要求的 `:`（`1:1083`）。
 
 ---
 
-## AI 语义标注
-
-默认使用 `rules/*.json` 关键词匹配识别组件类型（无需 AI 配置）。
-
-开启 AI 标注后，组件名称从 `Frame_24` 变为 `col_HexTechGold_Wide` 等有意义的名称。
-
-### 方式 A：IDE AI 手动标注（推荐，无需 API Key）
-
-```bash
-# 第一步：生成摘要文件（约 8KB，从 3MB 原始 JSON 压缩而来）
-AI_DRY_RUN=true bun run convert "https://..."
-# 或
-bun run dry-run "https://..."
-```
-
-生成两个文件：
-- `{output}/ai_input_summary.json` — 发给 AI 的节点摘要
-- `{output}/ai_input_prompt.md` — 完整 Prompt（含规则上下文）
-
-**第二步**：在 IDE 中把 `ai_input_prompt.md` 发给 AI 助手（@文件 引用），获得 JSON 结果。
-
-**第三步**：将 AI 返回的 JSON 保存为 `{output}/semantic_tags.json`。
-
-**第四步**：重新运行转换命令，自动读取标注结果：
-
-```bash
-bun run convert "https://..."
-```
-
-### 方式 B：自动 API 调用
-
-在 `.env` 中配置：
-
-```ini
-AI_API_KEY=sk-your-api-key
-AI_API_BASE=https://api.openai.com/v1
-AI_MODEL=gpt-4o-mini
-```
-
-### 标注结果格式（`semantic_tags.json`）
+## 🎛️ semantic_tags.json 字段说明
 
 ```json
 [
   {
-    "node_id": "1339:6408",
-    "semantic_type": "Component",
-    "fgui_name": "col_HexTechGold_Icon",
+    "node_id": "88:3805",
+    "semantic_type": "Component | Button | Label | List | Image | ComboBox | Slider | ProgressBar",
+    "fgui_name": "语义化组件名（英文，无空格）",
+    "button_mode": "Common | Check | Radio",
     "children_roles": {
-      "1339:6409": "btn_Cash",
-      "1339:6410": "btn_Crystal"
+      "子节点ID": "bg | title | icon | bar | grip | ..."
     },
-    "state_pages": { "0": "normal", "1": "hover" },
-    "risks": []
-  },
-  {
-    "node_id": "1339:6409",
-    "semantic_type": "Button",
-    "fgui_name": "Btn_HexTechGold_Cash",
-    "children_roles": {},
-    "state_pages": { "0": "normal", "1": "hover" },
-    "risks": []
+    "list_item_node_id": "List item template 节点 ID",
+    "list_num_items":  7,
+    "list_col_gap":    0,
+    "list_row_gap":   20,
+    "reparent": {
+      "new_parent": "目标父节点ID",
+      "role": "在新父节点中的角色名（可选）"
+    },
+    "risks": ["不确定项说明"]
   }
 ]
 ```
 
+### `semantic_type` 关键规则
+
+| 类型 | 何时使用 |
+|---|---|
+| `Image` | 纯装饰背景/纹理层（无文字/按钮子节点），整体 SSR 为一张 PNG |
+| `Component` | 通用容器，让代码决定如何处理 |
+| `Button` | 可点击按钮，配合 `button_mode` |
+| `Label` | 图标+文字菜单项，同结构自动合并复用，title 通过 override 覆盖 |
+| `List` | 列表，直接内联 `<list>` 标签，不生成独立 XML |
+
+> ⚠️ 含 Text/Button 子节点的容器**禁止**标注为 `Image`
+
 ---
 
-## 调整规则（不改代码）
+## 📐 架构概览
 
-所有转换规则外置在 `rules/` 目录，按需修改 JSON 文件：
+```
+src/
+├── analyze.ts              ← 第一步 CLI：下载数据 + 生成摘要
+├── convert-only.ts         ← 第二步 CLI：读取标注 + 执行转换
+├── index.ts                ← 核心管线（run() 函数）
+├── FigmaClient.ts          ← Figma REST API 客户端
+├── RawFigmaParser.ts       ← Figma JSON → UINode 树
+├── ImagePipeline.ts        ← SSR 图片批量下载（含视觉叶检测）
+├── Common.ts               ← 工具函数（sanitizeFileName 等）
+├── models/
+│   ├── UINode.ts           ← 核心数据结构
+│   └── FGUIEnum.ts         ← FGUI 组件类型枚举
+├── mapper/
+│   └── PropertyMapper.ts   ← UINode 属性 → FGUI XML 属性（含 2x 缩放）
+├── generator/
+│   ├── XMLGenerator.ts     ← 组件 XML / package.xml 生成
+│   ├── SubComponentExtractor.ts  ← 子组件提取 + 多状态 + Label 合并
+│   └── handlers/           ← 按节点类型分发的 XML 生成器
+├── rules/                  ← 外置规则 JSON（不改代码可调整行为）
+├── tagger/
+│   └── AISemanticTagger.ts ← AI 标注器（dry-run / API 模式）
+├── utils/
+│   └── parseFigmaUrl.ts    ← Figma URL 解析
+└── skill/                  ← AI 上下文文档（G01~G06 规则模块）
+```
+
+---
+
+## 🔧 调整规则（无需改代码）
+
+所有转换规则外置在 `rules/` 目录：
 
 | 文件 | 控制 |
 |---|---|
 | `rules/type-keywords.json` | 节点名关键词 → FGUI 组件类型 |
 | `rules/naming-map.json` | 子节点角色 → 标准名称（`title`/`icon`/`bar`/`grip`） |
-| `rules/exclude-names.json` | 排除列表 + 背景识别关键词 + 坐标归零阈值 |
+| `rules/exclude-names.json` | 排除列表 + 背景识别关键词 |
 | `rules/button-states.json` | Button 多状态控制器页映射 |
-| `rules/pipeline-config.json` | 缩放倍率、批次参数、Loader 填充模式等 |
+| `rules/pipeline-config.json` | 缩放倍率、批次参数等 |
 
-### 常见调整
+每个节点还可通过 `project-rules.json` **按项目覆盖**静态规则：
 
-**识别不到按钮（命名不规范）** → `rules/type-keywords.json`：
 ```json
-"Button": {
-  "keywords": ["button", "btn", "clickable", "你的项目命名"]
+{
+  "backgroundNodeNames": ["bg_gradient", "Rectangle_1295"],
+  "typeKeywords": {
+    "Button": ["AL3_/_HexTech_Glod", "AL3_/_HexTech_Blue"]
+  }
 }
-```
-
-**子节点没被命名为 `title`** → `rules/naming-map.json`：
-```json
-"title": {
-  "match": ["label", "title", "文本", "你用的名字"]
-}
-```
-
-**坐标偏移归零阈值太大/太小** → `rules/exclude-names.json`：
-```json
-"coordZeroThreshold": { "px": 3.5 }
-```
-
-**需要 1x 输出** → `rules/pipeline-config.json`：
-```json
-"scale": { "value": 1 }
 ```
 
 ---
 
-## 输出结构
+## 📁 输出结构
 
 ```
-FGUIProject/assets/Node_88-3805/
-├── img/                        ← SSR 渲染图片（语义化命名）
-│   ├── bg_112_5767-112_5566.png
-│   ├── icon_7_61-172_2273.png
+FGUIProject/assets/Node_88_3805/
+├── img/                         ← SSR 渲染图片（语义化命名）
+│   ├── bg_scene_112_5767.png
+│   ├── bg_1_152.png
 │   └── ...
-├── Page_GameUI.xml             ← 根页面组件
-├── Bg_Page.xml                 ← 子组件
-├── Btn_HexTechGold_Cash.xml    ← 按钮变体
-├── col_HexTechGold_Icon.xml    ← 按钮容器列
+├── Page02.xml                   ← 根页面组件
+├── btn_Play.xml                 ← 子组件
+├── btn_HexGold.xml              ← 按钮（同结构复用）
+├── btn_Bar.xml                  ← 按钮栏容器
 ├── ...（共 N 个 XML）
-├── package.xml                 ← FGUI 包描述文件
-├── handoff.yaml                ← AI 决策回收日志（有 AI 标注时生成）
-├── semantic_tags.json          ← AI 标注结果（手动/自动生成后放置）
-├── ai_input_summary.json       ← Dry-run 生成的节点摘要
-└── figma_debug.json            ← Figma API 缓存（避免重复请求）
+├── package.xml                  ← FGUI 包描述文件
+├── thumbnail.png                ← 节点预览截图（analyze 阶段下载）
+├── handoff.yaml                 ← AI 决策回收日志
+├── semantic_tags.json           ← AI 标注结果
+├── project-rules.json           ← 当前项目动态规则
+├── ai_input_prompt.md           ← 分析任务文件（发给 IDE AI）
+├── ai_input_summary.json        ← 节点摘要
+└── figma_debug.json             ← Figma API 缓存
 ```
 
 ---
 
-## .env 完整配置说明
+## ⚙️ .env 完整配置
 
 ```ini
 # ── 必填 ────────────────────────────────────────────────
 FIGMA_TOKEN=figd_your_personal_access_token
 
-# ── 可选（也可通过命令行参数传入） ────────────────────────
-FIGMA_FILE_KEY=rrkjikmTdpPpHJeYcMhR7n   # bun run start 模式使用
-FIGMA_NODE_ID=88-3805                    # bun run start 模式使用
+# ── 可选 ─────────────────────────────────────────────────
 OUTPUT_PATH=./FGUIProject/assets
 
 # ── AI 语义标注（全部可选） ─────────────────────────────────
-# 方式 A [手动]: 把 semantic_tags.json 放入输出目录，自动读取
-# 方式 B [API]:  填写 AI_API_KEY，自动调用
-# 方式 C [Dry]:  设置 AI_DRY_RUN=true，生成摘要给 IDE AI 处理
-# 方式 D [规则]: 以上均不配置，使用 rules/*.json 关键词匹配
-AI_API_KEY=sk-your-api-key
+AI_API_KEY=sk-your-api-key          # 自动 API 调用
 AI_API_BASE=https://api.openai.com/v1
 AI_MODEL=gpt-4o-mini
-AI_BATCH_SIZE=20        # 每批发给 AI 的顶层节点数
-AI_DRY_RUN=false
+AI_BATCH_SIZE=20
 
-# ── 调试开关 ────────────────────────────────────────────
+# ── 调试开关 ─────────────────────────────────────────────
 FORCE_DOWNLOAD=false    # true = 强制重新下载所有图片
 SKIP_AI_TAGGER=false    # true = 跳过 AI，只用规则模式
 ```
 
 ---
 
-## 项目结构
+## 🔑 关键设计决策
 
-```
-design2fgui/
-├── src/
-│   ├── cli.ts                  ← CLI 入口（URL 模式）
-│   ├── index.ts                ← 核心管线（run() 函数）
-│   ├── FigmaClient.ts          ← Figma REST API 客户端
-│   ├── RawFigmaParser.ts       ← Figma JSON → UINode 树
-│   ├── ImagePipeline.ts        ← SSR 图片批量下载
-│   ├── Common.ts               ← 工具函数
-│   ├── models/                 ← 数据模型
-│   ├── generator/              ← XML 生成（SubComponentExtractor / XMLGenerator / Handlers）
-│   ├── mapper/                 ← 属性映射（PropertyMapper）
-│   ├── rules/                  ← 规则加载器（RuleLoader）
-│   ├── tagger/                 ← AI 语义标注器（AISemanticTagger）
-│   └── utils/
-│       └── parseFigmaUrl.ts    ← Figma URL 解析
-├── rules/                      ← 外置规则（JSON，按项目覆盖）
-├── skill/                      ← AI 上下文文档（G01~G06）
-├── .env.example
-└── package.json
-```
+### 视觉叶节点检测
+
+`ImagePipeline.isVisualLeaf()` 判定是否整体 SSR：
+
+1. `semanticType=Image`（AI 明确标注）→ **最高优先级，强制整体 SSR**
+2. 节点类型为 `ObjectType.Image` → 直接渲染
+3. 容器且所有后代均为形状节点 → 合并渲染
+4. 含 Mask 后代 → 合并渲染
+
+### Label 同结构复用
+
+同结构的导航菜单项（仅 title 文字不同）自动合并为一个 XML 模板，在父组件中通过 `<Label title="..."/>` 覆盖，减少冗余文件。
+
+### 背景节点识别（三层防御）
+
+1. `project-rules.backgroundNodeNames` 精确指定 → 最高优先级，跳过尺寸校验
+2. 关键词推断（`bg`、`background`、`底` 等）→ 要求面积 ≥ 容器 60%
+3. 装饰词排除（`bg_texture`、`bg_highlight`、`bg_gradient` 等）→ 不作为 justify 基准
+
+### 全局 2x 缩放
+
+所有坐标、尺寸、字号、描边统一 `× FGUI_SCALE(=2)` 输出，匹配高清资源。
 
 ---
 
-## 常见问题
+## ⚠️ 注意事项
 
-**Q: 报 403 Forbidden**
-Token 已过期，重新在 [Figma Settings](https://www.figma.com/settings) 生成并更新 `.env`。
+- **禁止在 FGUI 编辑器中点击「刷新」** — 会重置 `package.xml` 资源 ID，破坏引用。正确做法：关闭项目 → 重新打开。
+- **摘要截断警告** — `analyze` 阶段若 prompt 顶部出现截断警告表格，必须查询 `figma_debug.json` 补全缺失节点后再生成标注。
+- **缓存机制** — Figma 数据缓存为 `figma_debug.json`，图片缓存到 `img/`。设置 `FORCE_DOWNLOAD=true` 强制刷新。
 
-**Q: 图片下载后是空白**
-设置 `FORCE_DOWNLOAD=true` 重跑一次，强制刷新缓存。
+---
 
-**Q: 组件名称还是 Frame_24 这样的机械名**
-使用 AI 标注（参考上方「AI 语义标注」章节），在 `semantic_tags.json` 中指定 `fgui_name` 字段。
+## 🎬 测试设计稿
 
-**Q: 想修改组件类型识别规则**
-编辑 `rules/type-keywords.json`，无需修改代码。
-
-**Q: 大文件报超时**
-调整 `rules/pipeline-config.json` 中的 `imagePipeline.batchDelayMs` 增加批次间隔。
+| 设计稿 | Figma 链接 | 核心测试点 |
+|---|---|---|
+| **LOL 风格游戏主界面** | [GAME UI Design In Figma](https://www.figma.com/community/file/1050752368690341429) | HexTech 按钮变体、复杂嵌套组件 |
+| **游戏邮件系统** | 见 `.last_url` | List 内联、reparent、背景识别 |
+| **列表详情页** | 见 `.last_url` | Label 合并、ComboBox、Table |
