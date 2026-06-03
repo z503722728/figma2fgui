@@ -52,6 +52,23 @@ export class FigmaClient {
         return response.data.images;
     }
 
+    /**
+     * 渲染节点为低分辨率预览图（用于 AI 分析截图，不用于游戏资源）。
+     * scale=0.25 → 1920px 界面输出约 480px 宽，体积小、速度快。
+     */
+    public async getPreviewUrl(nodeId: string): Promise<string | null> {
+        try {
+            const response = await axios.get(`${this.baseUrl}/images/${this.fileKey}`, {
+                params: { ids: nodeId, format: 'png', scale: 0.25 },
+                headers: { 'X-Figma-Token': this.token }
+            });
+            return response.data.images?.[nodeId] ?? null;
+        } catch (e: any) {
+            console.warn(`⚠️  节点预览图渲染失败: ${e.message}`);
+            return null;
+        }
+    }
+
     public async downloadImage(url: string, destPath: string) {
         const response = await axios.get(url, {
             responseType: 'arraybuffer',

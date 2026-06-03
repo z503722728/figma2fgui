@@ -281,9 +281,18 @@ export async function run(opts: RunOptions): Promise<void> {
                 // 💡 List item template：整体 SSR 成一张图（含圆角背景 + 图片遮罩）
                 const isListItem = !!(compRootFn as any)._isListItem;
 
+                // 💡 AI 明确标注为 Image 的组件（semanticType=Image）：强制整体 SSR，不展开子节点
+                const isSemanticImage = (compRootFn as any).semanticType === 'Image';
+
                 if (!isPureShape || isExtensionComp) {
                     matchExistingPngs([compRootFn]);
                     pipeline.scanAndEnqueue([compRootFn], allResources);
+                } else if (isSemanticImage) {
+                    // 纯形状但 AI 明确标注为 Image → 强制整体 SSR（同 _mergeWithParent 逻辑）
+                    (compRootFn as any)._mergeWithParent = true;
+                    matchExistingPngs([compRootFn]);
+                    pipeline.scanAndEnqueue([compRootFn], allResources);
+                    console.log(`🖼️ 强制 SSR: ${res.name}（AI 标注 Image）`);
                 } else if (isListItem) {
                     // List item template：
                     // 有 _variantLayers → 保留子节点，走正常扫描流程（bg 子节点各自下载）

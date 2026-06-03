@@ -21,7 +21,7 @@ dotenv.config();
 
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import * as crypto from 'crypto';
+import axios from 'axios';
 import { parseFigmaUrl } from './utils/parseFigmaUrl';
 import { FigmaClient } from './FigmaClient';
 import { AISemanticTagger } from './tagger/AISemanticTagger';
@@ -112,18 +112,40 @@ design2fgui analyze — 下载 Figma 数据并生成 AI 分析任务
 
     // ─── 获取 Figma 数据 ──────────────────────────────────────────────────────
     let figmaData: any;
+    let client: FigmaClient | null = null;
 
     if (await fs.pathExists(debugJsonPath)) {
         console.log(`⚡ 使用本地缓存: ${debugJsonPath}`);
         figmaData = JSON.parse(await fs.readFile(debugJsonPath, 'utf-8'));
     } else {
         console.log(`📡 从 Figma API 获取数据...`);
-        const client = new FigmaClient(token, fileKey);
+        client = new FigmaClient(token, fileKey);
         figmaData = nodeId
             ? await client.getNodes([nodeId])
             : await client.getFile();
         await fs.writeFile(debugJsonPath, JSON.stringify(figmaData, null, 2));
         console.log(`💾 数据已缓存: ${debugJsonPath}`);
+    }
+
+    // ─── 下载节点预览截图（首次获取，SSR 指定节点，非文件封面）─────────────
+    const localThumbPath = path.join(packagePath, 'thumbnail.png');
+    if (!isRevise && !await fs.pathExists(localThumbPath) && nodeId) {
+        try {
+            if (!client) client = new FigmaClient(token, fileKey);
+            console.log(`🖼️  正在渲染节点预览图: ${nodeId}...`);
+            const previewUrl = await client.getPreviewUrl(nodeId);
+            if (previewUrl) {
+                const resp = await axios.get(previewUrl, { responseType: 'arraybuffer', timeout: 30000 });
+                await fs.writeFile(localThumbPath, resp.data);
+                console.log(`🖼️  节点截图已缓存: ${localThumbPath}`);
+                // 把本地路径注入 figmaData，供 dryRun 使用
+                figmaData._localThumbnailPath = localThumbPath;
+            }
+        } catch (e: any) {
+            console.warn(`⚠️  预览图下载失败，将使用文件封面: ${e.message}`);
+        }
+    } else if (await fs.pathExists(localThumbPath)) {
+        figmaData._localThumbnailPath = localThumbPath;
     }
 
     // ─── 生成 AI 分析任务 ─────────────────────────────────────────────────────

@@ -577,22 +577,25 @@ export class AISemanticTagger {
         await fs.writeFile(summaryPath, summaryJson, 'utf-8');
 
         // ── 截图：优先复用本地缓存，首次下载后保存 ──────────────────────────
-        const localThumbPath = path.join(packagePath, 'thumbnail.webp');
+        const localThumbPath = path.join(packagePath, 'thumbnail.png');
+        // analyze.ts 会提前下载并写入 figmaData._localThumbnailPath；
+        // 若已有缓存文件则直接复用；最后才回退到文件封面 thumbnailUrl（远端 S3）
         let thumbnailUrl: string | undefined = figmaData?.thumbnailUrl;
-        let localThumbExists = await fs.pathExists(localThumbPath);
+        let localThumbExists = !!(figmaData?._localThumbnailPath) || await fs.pathExists(localThumbPath);
 
         if (!localThumbExists && thumbnailUrl) {
+            // 兜底：analyze 未下载成功时，用文件封面 URL 下载
             try {
                 const resp = await axios.get(thumbnailUrl, { responseType: 'arraybuffer', timeout: 15000 });
                 await fs.writeFile(localThumbPath, resp.data);
                 localThumbExists = true;
-                console.log(`🖼️  截图已缓存: ${localThumbPath}`);
+                console.log(`🖼️  截图已缓存（文件封面）: ${localThumbPath}`);
             } catch (e: any) {
                 console.warn(`⚠️  截图下载失败（将使用远端 URL）: ${e.message}`);
             }
         } else if (localThumbExists) {
             console.log(`🖼️  复用本地截图: ${localThumbPath}`);
-            thumbnailUrl = undefined; // prompt 里改用本地路径引用
+            thumbnailUrl = undefined;
         }
 
         // prompt 里的截图引用：本地优先（相对路径），远端备用
