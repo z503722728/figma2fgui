@@ -470,6 +470,36 @@ export async function run(opts: RunOptions): Promise<void> {
         console.log(`📋 AI 决策回收 YAML 已写入: ${yamlPath}`);
     }
 
+    // ─── 8. 生成后自检简报 ────────────────────────────────────────────────────────
+    {
+        const xmlFiles = (await fs.readdir(packagePath)).filter(f => f.endsWith('.xml') && f !== 'package.xml');
+        let missingImageSrc = 0;
+        let orphanListXml   = 0;
+        let orphanImageXml  = 0;
+
+        for (const xmlFile of xmlFiles) {
+            const content = await fs.readFile(path.join(packagePath, xmlFile), 'utf-8');
+            // List 空壳检测
+            if (content.includes('extention="List"') && content.includes('<displayList/>')) orphanListXml++;
+            // Image 空壳检测（component 只含一个无 src 的 image 节点）
+            if (!content.includes('extention=') && content.includes('<image') && !content.includes('src=')) missingImageSrc++;
+        }
+
+        const warnings = [];
+        if (orphanListXml   > 0) warnings.push(`⚠️  ${orphanListXml} 个 List 空壳 XML（应内联）`);
+        if (orphanImageXml  > 0) warnings.push(`⚠️  ${orphanImageXml} 个缺失 src 的图片节点`);
+        if (missingImageSrc > 0) warnings.push(`⚠️  ${missingImageSrc} 个 XML 含无 src 的 image 节点`);
+
+        const imageTotal   = uniqueImages.length;
+        const componentTotal = validResources.filter(r => r.type === 'component').length;
+        console.log(`\n📊 生成简报：${componentTotal} 个组件 XML，${imageTotal} 张图片资源`);
+        if (warnings.length === 0) {
+            console.log(`   ✅ 自检通过，无异常`);
+        } else {
+            warnings.forEach(w => console.warn(`   ${w}`));
+        }
+    }
+
     console.log(`\n🎉 成功！FGUI 包已生成至: ${packagePath}`);
 }
 
