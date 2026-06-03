@@ -5,7 +5,8 @@
   "main": "src/index.ts",
   "scripts": {
     "analyze": "bun run src/analyze.ts",
-    "convert-only": "bun run src/convert-only.ts"
+    "convert-only": "bun run src/convert-only.ts",
+    "revise": "bun run src/analyze.ts --revise"
   },
   "dependencies": {
     "axios": "^1.13.4",

@@ -556,11 +556,19 @@ export class AISemanticTagger {
      * 新增：传入 figmaData 可提取 thumbnailUrl，在 prompt 中嵌入界面截图，
      * 让 AI 能同时看「图像」和「节点树」双重信息进行语义划分。
      *
+     * reviseContext 不为空时，进入「修订模式」：prompt 会附加上次标注 + 人工反馈，
+     * AI 在此基础上输出修订后的完整 semantic_tags.json。
+     *
      * 输出文件：
      *   {packagePath}/ai_input_summary.json   → 节点摘要（depth≤5）
      *   {packagePath}/ai_input_prompt.md      → 完整 Prompt（含截图 URL + 节点摘要）
      */
-    async dryRun(nodes: any[], packagePath: string, figmaData?: any): Promise<string> {
+    async dryRun(
+        nodes: any[],
+        packagePath: string,
+        figmaData?: any,
+        reviseContext?: { previousTags: string; feedback: string }
+    ): Promise<string> {
         const { summaries, depthUsed } = buildSummaries(nodes);
         const summaryJson = JSON.stringify(summaries, null, 2);
 
@@ -568,8 +576,47 @@ export class AISemanticTagger {
         const summaryPath = path.join(packagePath, 'ai_input_summary.json');
         await fs.writeFile(summaryPath, summaryJson, 'utf-8');
 
-        // 提取界面截图 URL（Figma API 返回的 thumbnailUrl）
-        const thumbnailUrl: string | undefined = figmaData?.thumbnailUrl;
+        // ── 截图：优先复用本地缓存，首次下载后保存 ──────────────────────────
+        const localThumbPath = path.join(packagePath, 'thumbnail.webp');
+        let thumbnailUrl: string | undefined = figmaData?.thumbnailUrl;
+        let localThumbExists = await fs.pathExists(localThumbPath);
+
+        if (!localThumbExists && thumbnailUrl) {
+            try {
+                const resp = await axios.get(thumbnailUrl, { responseType: 'arraybuffer', timeout: 15000 });
+                await fs.writeFile(localThumbPath, resp.data);
+                localThumbExists = true;
+                console.log(`🖼️  截图已缓存: ${localThumbPath}`);
+            } catch (e: any) {
+                console.warn(`⚠️  截图下载失败（将使用远端 URL）: ${e.message}`);
+            }
+        } else if (localThumbExists) {
+            console.log(`🖼️  复用本地截图: ${localThumbPath}`);
+            thumbnailUrl = undefined; // prompt 里改用本地路径引用
+        }
+
+        // prompt 里的截图引用：本地优先（相对路径），远端备用
+        const thumbLines: string[] = localThumbExists ? [
+            '## 界面截图',
+            '',
+            '> 请先查看此截图，理解整体视觉布局，再分析节点摘要：',
+            '',
+            `![界面截图](${localThumbPath})`,
+            '',
+        ] : thumbnailUrl ? [
+            '## 界面截图',
+            '',
+            '> 请先查看此截图，理解整体视觉布局，再分析节点摘要：',
+            '',
+            `![界面截图](${thumbnailUrl})`,
+            '',
+            `**截图 URL**（若上方图片无法显示，复制到浏览器查看）：`,
+            `\`${thumbnailUrl}\``,
+            '',
+        ] : [
+            '> ⚠️ 未获取到界面截图，请通过 Figma 链接手动查看设计稿',
+            '',
+        ];
 
         // 写 Prompt 说明文件
         const promptPath = path.join(packagePath, 'ai_input_prompt.md');
@@ -584,20 +631,7 @@ export class AISemanticTagger {
             `4. 将结果保存为 \`${packagePath}/semantic_tags.json\``,
             '5. 再次运行 `bun run convert <figma_url>` 自动读取标注结果',
             '',
-            ...(thumbnailUrl ? [
-                '## 界面截图',
-                '',
-                '> 请先查看此截图，理解整体视觉布局，再分析节点摘要：',
-                '',
-                `![界面截图](${thumbnailUrl})`,
-                '',
-                `**截图 URL**（若上方图片无法显示，复制到浏览器查看）：`,
-                `\`${thumbnailUrl}\``,
-                '',
-            ] : [
-                '> ⚠️ 未获取到界面截图，请通过 Figma 链接手动查看设计稿',
-                '',
-            ]),
+            ...thumbLines,
             '## 分析重点',
             '',
             '请特别关注以下情况，需要准确识别：',
@@ -626,6 +660,30 @@ export class AISemanticTagger {
             '```json',
             summaryJson,
             '```',
+            // ── 修订模式：附加上次标注 + 人工反馈 ──────────────────────────────
+            ...(reviseContext ? [
+                '',
+                '---',
+                '',
+                '## ⚠️ 修订模式 — 请基于以下反馈修正标注',
+                '',
+                '上次生成的 XML 存在问题，人工反馈如下：',
+                '',
+                '```',
+                reviseContext.feedback,
+                '```',
+                '',
+                '### 上次的 semantic_tags.json（供参考，请在此基础上修正）',
+                '',
+                '```json',
+                reviseContext.previousTags,
+                '```',
+                '',
+                '**要求**：',
+                '- 仅修改反馈中指出的问题节点，其余节点保持不变',
+                '- 输出完整的 semantic_tags.json（包含未修改的节点）',
+                '- 在修改的节点 risks 字段中注明修改原因',
+            ] : []),
         ].join('\n');
         await fs.writeFile(promptPath, promptContent, 'utf-8');
 

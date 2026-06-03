@@ -7,3 +7,4 @@ input/
 dist/
 *.log
 FGUIProject/assets/Node_*
+.last_url

@@ -18,7 +18,6 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import { parseFigmaUrl } from './utils/parseFigmaUrl';
 import { run } from './index';
-
 /** 记录最后一次使用的 Figma URL 的本地文件路径 */
 const LAST_URL_FILE = path.join(__dirname, '../.last_url');
 
@@ -101,6 +100,18 @@ design2fgui convert-only — 执行转换（需先运行 analyze）
         figmaNodeId:  nodeId ?? undefined,
         outputPath,
     });
+
+    // ─── 生成后提示反馈循环入口 ───────────────────────────────────────────────
+    const finalOutputDir = outputPath || path.join(__dirname, '../FGUIProject/assets');
+    const nodeIdForPath  = nodeId?.replace(/[:\-]/g, '_');
+    const packName       = nodeIdForPath ? `Node_${nodeIdForPath}` : 'CloudPackage';
+    const packagePath    = path.join(finalOutputDir, packName);
+    const feedbackPath   = path.join(packagePath, 'feedback.md');
+
+    console.log('');
+    console.log('💬 如需修正标注，创建反馈文件后运行修订：');
+    console.log(`   ${feedbackPath}`);
+    console.log('   bun run analyze --revise');
 }
 
 convertOnly().catch(err => {

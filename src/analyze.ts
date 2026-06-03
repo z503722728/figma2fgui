@@ -29,30 +29,52 @@ import { AISemanticTagger } from './tagger/AISemanticTagger';
 async function analyze() {
     const args = process.argv.slice(2);
 
+    // ─── --revise 模式：无需 URL，读取 feedback.md 重新生成 prompt ────────────
+    const isRevise = args[0] === '--revise';
+
     if (args.length === 0 || args[0] === '--help') {
         console.log(`
 design2fgui analyze — 下载 Figma 数据并生成 AI 分析任务
 
 用法：
-  bun run analyze <figma_url>
+  bun run analyze <figma_url>          # 首次分析
+  bun run analyze --revise             # 基于 feedback.md 修订标注（无需重新下载）
 
-示例：
-  bun run analyze "https://www.figma.com/design/abc123/Name?node-id=1-1083"
+反馈循环：
+  1. bun run analyze <url>             → AI 标注 → bun run convert-only
+  2. 查看生成的 XML，发现问题
+  3. 编辑 {packagePath}/feedback.md    → 描述问题
+  4. bun run analyze --revise          → 生成修订 prompt → AI 重新标注
+  5. bun run convert-only              → 重新生成 XML
+  6. 满意为止，重复步骤 2-5
 
 输出：
   {output}/figma_debug.json      — Figma 数据缓存
   {output}/ai_input_summary.json — 节点摘要（depth≤5）
-  {output}/ai_input_prompt.md    — IDE AI 分析任务（含截图 + 摘要 + 规范）
+  {output}/ai_input_prompt.md    — IDE AI 分析任务（修订模式含反馈上下文）
 
 下一步：
-  IDE AI 读取 ai_input_prompt.md → 生成 project-rules.json + semantic_tags.json
-  → bun run convert-only <figma_url>
+  IDE AI 读取 ai_input_prompt.md → 生成/修订 project-rules.json + semantic_tags.json
+  → bun run convert-only
 `);
         process.exit(0);
     }
 
-    const figmaUrl   = args[0];
-    const outputPath = args[1] ?? process.env.OUTPUT_PATH;
+    // ─── --revise 模式：从 .last_url 读取上次 URL ────────────────────────────
+    let figmaUrl: string;
+    if (isRevise) {
+        const lastUrlFile = path.join(__dirname, '../.last_url');
+        if (!fs.existsSync(lastUrlFile)) {
+            console.error('❌ --revise 模式需要先运行过 analyze/convert-only（.last_url 不存在）');
+            process.exit(1);
+        }
+        figmaUrl = fs.readFileSync(lastUrlFile, 'utf-8').trim();
+        console.log(`🔁 --revise 模式，使用上次 URL: ${figmaUrl}`);
+    } else {
+        figmaUrl = args[0];
+    }
+
+    const outputPath = (isRevise ? args[1] : args[1]) ?? process.env.OUTPUT_PATH;
 
     // ─── 解析 URL ─────────────────────────────────────────────────────────────
     let fileKey: string;
@@ -122,8 +144,35 @@ design2fgui analyze — 下载 Figma 数据并生成 AI 分析任务
     }
 
     const tagger = new AISemanticTagger();
-    // 传入 figmaData 以提取 thumbnailUrl
-    const summaryPath = await tagger.dryRun(topNodes, packagePath, figmaData);
+
+    // ─── 修订模式：读取 feedback.md 和上次 semantic_tags.json ────────────────
+    let reviseContext: { previousTags: string; feedback: string } | undefined;
+    if (isRevise) {
+        const feedbackPath = path.join(packagePath, 'feedback.md');
+        const tagsPath     = path.join(packagePath, 'semantic_tags.json');
+
+        if (!fs.existsSync(feedbackPath)) {
+            console.error(`❌ 未找到反馈文件: ${feedbackPath}`);
+            console.error(`   请先创建此文件，描述生成结果中的问题，再运行 --revise`);
+            process.exit(1);
+        }
+        const feedback     = fs.readFileSync(feedbackPath, 'utf-8').trim();
+        const previousTags = fs.existsSync(tagsPath)
+            ? fs.readFileSync(tagsPath, 'utf-8')
+            : '（无上次标注）';
+
+        reviseContext = { previousTags, feedback };
+
+        // 归档反馈（避免下次误触发），保留历史记录
+        const archivePath = path.join(packagePath, `feedback_${Date.now()}.md.bak`);
+        fs.copyFileSync(feedbackPath, archivePath);
+        fs.unlinkSync(feedbackPath);
+        console.log(`📦 反馈已归档: ${path.basename(archivePath)}`);
+        console.log(`📝 反馈内容:\n${feedback.split('\n').map(l => '   ' + l).join('\n')}`);
+    }
+
+    // 传入 figmaData 以提取 thumbnailUrl，修订模式传入 reviseContext
+    const summaryPath = await tagger.dryRun(topNodes, packagePath, figmaData, reviseContext);
 
     // ─── 追加动态规则生成规范 到 prompt ──────────────────────────────────────
     const promptPath = path.join(packagePath, 'ai_input_prompt.md');
@@ -133,7 +182,11 @@ design2fgui analyze — 下载 Figma 数据并生成 AI 分析任务
     // ─── 打印提示 ─────────────────────────────────────────────────────────────
     const thumbnailUrl = figmaData?.thumbnailUrl;
     console.log('');
-    console.log('✅ 分析准备完成！请 IDE AI 执行以下步骤：');
+    if (isRevise) {
+        console.log('🔄 修订 prompt 已生成！请 IDE AI 执行以下步骤：');
+    } else {
+        console.log('✅ 分析准备完成！请 IDE AI 执行以下步骤：');
+    }
     console.log('');
     console.log('  📄 阅读分析任务文件：');
     console.log(`     ${promptPath}`);
@@ -143,12 +196,20 @@ design2fgui analyze — 下载 Figma 数据并生成 AI 分析任务
         console.log(`     ${thumbnailUrl}`);
     }
     console.log('');
-    console.log('  📝 生成两个文件（保存到同一目录）：');
-    console.log(`     ${path.join(packagePath, 'project-rules.json')}`);
-    console.log(`     ${path.join(packagePath, 'semantic_tags.json')}`);
+    if (isRevise) {
+        console.log('  📝 修订并覆盖保存（保留未修改节点）：');
+        console.log(`     ${path.join(packagePath, 'semantic_tags.json')}`);
+    } else {
+        console.log('  📝 生成两个文件（保存到同一目录）：');
+        console.log(`     ${path.join(packagePath, 'project-rules.json')}`);
+        console.log(`     ${path.join(packagePath, 'semantic_tags.json')}`);
+    }
     console.log('');
-    console.log('  ▶️  分析完成后运行：');
-    console.log(`     bun run convert-only "${figmaUrl}"`);
+    console.log('  ▶️  完成后运行：');
+    console.log(`     bun run convert-only`);
+    console.log('');
+    console.log('  💬 如仍有问题，编辑 feedback.md 再次运行：');
+    console.log(`     bun run analyze --revise`);
     console.log('');
 }
 
