@@ -110,6 +110,10 @@ export class RawFigmaParser {
             _listItemTemplateName: node._listItemTemplateName,
             // List item template 节点 ID（AI 标注，精确定位）
             _listItemNodeId: node._listItemNodeId,
+            // List 布局参数（AI 标注）
+            _listColGap: node._listColGap,
+            _listRowGap: node._listRowGap,
+            _listNumItems: node._listNumItems,
             // 多变体图层（AI 标注）
             _variantLayers: node._variantLayers,
             // reparent 记录（调试用）

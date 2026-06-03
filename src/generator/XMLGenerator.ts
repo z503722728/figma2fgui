@@ -26,7 +26,13 @@ export class XMLGenerator {
         buttonMode?: string,
         listItemTemplate?: string,
         /** 父节点的 childrenRoles，用于给直接子节点赋予语义名 */
-        parentChildrenRoles?: Record<string, string>
+        parentChildrenRoles?: Record<string, string>,
+        /** List 列间距（FlowH 模式） */
+        listColGap?: number,
+        /** List 行间距（FlowH 模式） */
+        listRowGap?: number,
+        /** List 编辑器预览 item 数量 */
+        listNumItems?: number,
     ): string {
         const component = xmlbuilder.create('component').att('size', `${width * FGUI_SCALE},${height * FGUI_SCALE}`);
         if (extention) component.att('extention', extention);
@@ -35,9 +41,10 @@ export class XMLGenerator {
             this._registry.getButtonHandler().writeButtonPreamble(component, buttonMode);
         } else if (extention === 'List') {
             const listAttrs: Record<string, string> = { layout: 'FlowH', overflow: 'scroll' };
-            if (listItemTemplate) {
-                listAttrs.defaultItem = `ui://${buildId}${listItemTemplate}`;
-            }
+            if (listItemTemplate) listAttrs.defaultItem = `ui://${buildId}${listItemTemplate}`;
+            if (listColGap  !== undefined) listAttrs.colGap  = String(listColGap);
+            if (listRowGap  !== undefined) listAttrs.lineGap = String(listRowGap);  // FGUI 行间距属性名是 lineGap
+            if (listNumItems !== undefined) listAttrs.numItems = String(listNumItems);
             component.ele('List', listAttrs);
         } else if (controllers && controllers.length > 0) {
             controllers.forEach(c => component.ele('controller', { name: c.name, pages: c.pages }));

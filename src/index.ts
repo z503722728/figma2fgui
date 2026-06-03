@@ -10,7 +10,7 @@ import { ImagePipeline } from './ImagePipeline';
 import { UINode, ResourceInfo } from './models/UINode';
 import { sanitizeFileName, FGUI_SCALE } from './Common';
 import { AISemanticTagger } from './tagger/AISemanticTagger';
-import { loadProjectRules, isBackgroundNode } from './rules/RuleLoader';
+import { loadProjectRules, isBackgroundNode, Rules } from './rules/RuleLoader';
 
 dotenv.config();
 
@@ -123,7 +123,7 @@ export async function run(opts: RunOptions): Promise<void> {
     // 4a. 匹配已有 PNG
     let existingPngs: string[] = [];
     if (fs.existsSync(imgDir)) {
-        existingPngs = fs.readdirSync(imgDir).filter(f => f.toLowerCase().endsWith('.png'));
+        existingPngs = fs.readdirSync(imgDir).filter((f: string) => f.toLowerCase().endsWith('.png'));
         console.log(`🖼️ 发现 ${existingPngs.length} 个已缓存 PNG`);
     }
 
@@ -384,7 +384,10 @@ export async function run(opts: RunOptions): Promise<void> {
                 compNode.width, compNode.height,
                 compNode.styles, compNode.extention, compNode.controllers,
                 compNode.buttonMode, compNode.listItemTemplate,
-                compNode.childrenRoles   // 传入父组件的 childrenRoles，子节点得到语义名
+                compNode.childrenRoles,   // 传入父组件的 childrenRoles，子节点得到语义名
+                compNode._listColGap,
+                compNode._listRowGap,
+                compNode._listNumItems,
             );
             await fs.writeFile(path.join(packagePath, safeName + '.xml'), xmlContent);
             res.name = safeName;
@@ -481,7 +484,7 @@ async function main() {
     });
 }
 
-if (import.meta.main) {
+if (require.main === module) {
     main().catch(err => {
         console.error("💥 Critical Error:", err);
         process.exit(1);

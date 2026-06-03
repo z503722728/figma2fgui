@@ -46,6 +46,15 @@ export interface NodeSemanticTag {
      */
     list_item_node_id?: string;
     /**
+     * List 布局参数（layout=FlowH 时有效）：
+     *   col_gap      = 列间距（像素）
+     *   row_gap      = 行间距（像素）
+     *   num_items    = 编辑器预览时展示的 item 数量（numItems）
+     */
+    list_col_gap?: number;
+    list_row_gap?: number;
+    list_num_items?: number;
+    /**
      * List item 变体图层：同一个组件有多种视觉变体（如不同颜色），
      * 用 state controller + gearDisplay 控制哪一张 bg 显示。
      *
@@ -422,6 +431,10 @@ export class AISemanticTagger {
                 if (tag.list_item_node_id) {
                     node._listItemNodeId = tag.list_item_node_id;
                 }
+                // list 布局参数
+                if (tag.list_col_gap !== undefined) node._listColGap = tag.list_col_gap;
+                if (tag.list_row_gap !== undefined) node._listRowGap = tag.list_row_gap;
+                if (tag.list_num_items !== undefined) node._listNumItems = tag.list_num_items;
                 // variant_layers：多变体图层（state controller + gearDisplay）
                 if (tag.variant_layers) {
                     node._variantLayers = tag.variant_layers;

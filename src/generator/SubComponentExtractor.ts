@@ -356,6 +356,10 @@ export class SubComponentExtractor {
                                 if (d.listItemTemplate) refNode.listItemTemplate = d.listItemTemplate;
                             } catch {}
                         }
+                        // 传递布局参数
+                        if (child._listColGap  !== undefined) refNode._listColGap  = child._listColGap;
+                        if (child._listRowGap  !== undefined) refNode._listRowGap  = child._listRowGap;
+                        if (child._listNumItems !== undefined) refNode._listNumItems = child._listNumItems;
                     }
                     const activePage = this.extractInstanceActiveState(child);
                     if (activePage > 0) {

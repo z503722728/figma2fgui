@@ -16,9 +16,9 @@ function deduplicateName(name: string, usedNames: Set<string>): string {
  *   <list id="n0" name="list_Items" xy="..." size="..."
  *         layout="FlowH" overflow="scroll"
  *         defaultItem="ui://{buildId}{itemResId}"
- *         autoClearItems="true"/>
- *
- * autoClearItems="true"：FGUI 编辑器预览时会清除预置的 item，发布后才正常。
+ *         autoClearItems="true">
+ *     <item/>  ← numItems 个，供编辑器预览；发布时 autoClearItems 自动清空
+ *   </list>
  */
 export class ListHandler implements INodeHandler {
     getElementName(_node: UINode): string { return 'list'; }
@@ -32,9 +32,12 @@ export class ListHandler implements INodeHandler {
             attrs.defaultItem = `ui://${buildId}${node.listItemTemplate}`;
         }
 
+        if (node._listColGap   !== undefined) attrs.colGap   = String(node._listColGap);
+        if (node._listRowGap   !== undefined) attrs.lineGap  = String(node._listRowGap);  // FGUI 行间距属性名是 lineGap
+        if (node._listNumItems !== undefined) attrs.numItems = String(node._listNumItems);
+
         delete attrs.type;
         delete attrs.fillColor;
-        // 内联 list 不需要 src/fileName
         delete attrs.src;
         delete attrs.fileName;
     }
@@ -50,7 +53,15 @@ export class ListHandler implements INodeHandler {
             : assignedId;
         const attrs = mapper.mapAttributes(node, assignedId, semanticName);
         this.populateAttributes(node, attrs, buildId);
-        parentEle.ele(this.getElementName(node), attrs);
+
+        const listEle = parentEle.ele(this.getElementName(node), attrs);
+
+        // 生成预览用的 <item/>，发布时 autoClearItems 自动清空
+        const numItems = node._listNumItems ?? 0;
+        for (let i = 0; i < numItems; i++) {
+            listEle.ele('item');
+        }
+
         return true;
     }
 }

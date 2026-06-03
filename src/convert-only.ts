@@ -9,22 +9,42 @@
  *
  * 用法：
  *   bun run convert-only <figma_url> [output_path]
+ *   bun run convert-only              # 重复使用上次的 URL
  */
 import * as dotenv from 'dotenv';
 dotenv.config();
 
+import * as fs from 'fs-extra';
+import * as path from 'path';
 import { parseFigmaUrl } from './utils/parseFigmaUrl';
 import { run } from './index';
+
+/** 记录最后一次使用的 Figma URL 的本地文件路径 */
+const LAST_URL_FILE = path.join(__dirname, '../.last_url');
+
+function saveLastUrl(url: string) {
+    try { fs.writeFileSync(LAST_URL_FILE, url, 'utf-8'); } catch {}
+}
+
+function loadLastUrl(): string | null {
+    try {
+        if (fs.existsSync(LAST_URL_FILE)) {
+            return fs.readFileSync(LAST_URL_FILE, 'utf-8').trim() || null;
+        }
+    } catch {}
+    return null;
+}
 
 async function convertOnly() {
     const args = process.argv.slice(2);
 
-    if (args.length === 0 || args[0] === '--help') {
+    if (args[0] === '--help') {
         console.log(`
 design2fgui convert-only — 执行转换（需先运行 analyze）
 
 用法：
   bun run convert-only <figma_url> [output_path]
+  bun run convert-only              # 使用上次记录的 URL
 
 前置条件：
   已运行 bun run analyze <figma_url>
@@ -36,8 +56,21 @@ design2fgui convert-only — 执行转换（需先运行 analyze）
         process.exit(0);
     }
 
-    const figmaUrl   = args[0];
+    let figmaUrl = args[0];
     const outputPath = args[1] ?? process.env.OUTPUT_PATH;
+
+    // 无参数时尝试读取上次的 URL
+    if (!figmaUrl) {
+        const last = loadLastUrl();
+        if (last) {
+            console.log(`🔁 使用上次记录的 URL: ${last}`);
+            figmaUrl = last;
+        } else {
+            console.error('❌ 未传入 Figma URL，且没有上次的记录');
+            console.error('   用法: bun run convert-only <figma_url>');
+            process.exit(1);
+        }
+    }
 
     let fileKey: string = '';
     let nodeId: string | null | undefined;
@@ -51,6 +84,10 @@ design2fgui convert-only — 执行转换（需先运行 analyze）
         console.error(`❌ URL 解析失败: ${e.message}`);
         process.exit(1);
     }
+
+    // 解析成功后持久化 URL
+    saveLastUrl(figmaUrl);
+    console.log(`💾 URL 已记录至 .last_url`);
 
     const token = process.env.FIGMA_TOKEN;
     if (!token) {

@@ -74,6 +74,12 @@ export interface UINode {
     _listItemTemplateName?: string;
     /** AI 标注的 list item template 节点 ID（精确定位，优先于名称查找）*/
     _listItemNodeId?: string;
+    /** List 列间距（FlowH 模式，单位像素）*/
+    _listColGap?: number;
+    /** List 行间距（FlowH 模式，单位像素）*/
+    _listRowGap?: number;
+    /** List 编辑器预览 item 数量 */
+    _listNumItems?: number;
     /**
      * 多变体图层：同一组件有多种视觉变体（如颜色不同），
      * 生成时插入多张 bg 子节点，用 state controller + gearDisplay 控制显隐。
