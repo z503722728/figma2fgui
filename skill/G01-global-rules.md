@@ -3,7 +3,7 @@ module_id: G01
 owns: [全局约束, 红线规则, 命名规范, 资源路径约定]
 inputs_from: []
 outputs_to: [G02, G03, G04, G05]
-version: "0.2.0"
+version: "0.3.0"
 ---
 
 # G01 — 全局约束与红线规则
@@ -76,6 +76,9 @@ AI 读取 `skill/G01` + `skill/G05` 作为 System Prompt，为每个节点输出
 | `children_roles` | 子节点角色映射：node_id → 标准名（title/icon/bg/bar/grip...） |
 | `list_item_template` | List 的 item template 名称 |
 | `list_item_node_id` | List 的 item template 精确节点 ID（优先于名称查找） |
+| `list_col_gap` | List 列间距（FGUI 单位，= Figma原始间距 × scale，对应 XML `colGap`） |
+| `list_row_gap` | List 行间距（FGUI 单位，= Figma原始间距 × scale，对应 XML **`lineGap`**） |
+| `list_num_items` | List 编辑器预览 item 数量（决定生成的 `<item/>` 个数） |
 | `variant_layers` | 多变体图层（state controller + gearIcon 换图，见 G05） |
 | `reparent` | 节点层级调整（移入新父节点，坐标自动转换，见 G04） |
 | `risks` | 不确定项（写入 handoff.yaml 供人工复查） |

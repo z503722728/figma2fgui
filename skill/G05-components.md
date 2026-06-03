@@ -1,9 +1,9 @@
 ---
 module_id: G05
-owns: [FGUI 组件类型映射, 子组件提取规则, 扩展组件标准命名, 多状态控制器, Button 模式, List 内联, variant_layers, reparent]
+owns: [FGUI 组件类型映射, 子组件提取规则, 扩展组件标准命名, 多状态控制器, Button 模式, List 内联, List 间距计算, variant_layers, reparent]
 inputs_from: [G01, G02, G03, G04]
 outputs_to: [G06]
-version: "1.2.0"
+version: "1.3.0"
 ---
 
 # G05 — 组件映射 / 子组件提取 / 多状态
@@ -106,12 +106,18 @@ XML：`<Button mode="Radio"/>`
 ```xml
 <list id="n9" name="list_Items" xy="..." size="..."
       layout="FlowH" overflow="scroll"
+      colGap="80" lineGap="60" numItems="10"
       autoClearItems="true"
-      defaultItem="ui://{buildId}{itemResId}"/>
+      defaultItem="ui://{buildId}{itemResId}">
+  <item/>  <!-- numItems 个，编辑器预览用；发布时 autoClearItems 自动清空 -->
+  <item/>
+  ...
+</list>
 ```
 
 - `autoClearItems="true"`：编辑器预览时清除预置 item，发布后正常
 - `defaultItem`：来自 `list_item_template`（名称）或 `list_item_node_id`（精确节点 ID）
+- **`<item/>` 子元素**：数量由 `list_num_items` 决定，编辑器需要才能预览布局
 - **List 子节点是 item template，不展开到 displayList**
 
 ### List item template 标注
@@ -122,12 +128,49 @@ XML：`<Button mode="Radio"/>`
   "semantic_type": "List",
   "fgui_name": "list_GachaItems",
   "list_item_template": "GachaItem",
-  "list_item_node_id": "1:985"
+  "list_item_node_id": "1:985",
+  "list_col_gap": 80,
+  "list_row_gap": 60,
+  "list_num_items": 10
 }
 ```
 
 - `list_item_template`：template 组件名称（在 _newResources 里按名称查找）
 - `list_item_node_id`：精确节点 ID（当 template 不是 list 直接子节点时使用）
+- `list_col_gap`：列间距（FGUI 单位，对应 XML 属性 `colGap`）
+- `list_row_gap`：行间距（FGUI 单位，对应 XML 属性 **`lineGap`**，⚠️ 不是 `rowGap`）
+- `list_num_items`：编辑器预览显示的 item 数量
+
+### ⚠️ 间距计算方法（Figma → FGUI）
+
+> **关键**：Figma 设计稿坐标是 1x，FGUI 输出是 2x，所有间距需乘以 scale（默认 2）。
+
+**第一步：从 `ai_input_summary.json` 或 `figma_debug.json` 读取原始尺寸**
+
+```
+容器宽（Figma 1x） = 880px
+item 宽（Figma 1x） = 144px，每行 5 个
+行数 = 2，容器高（Figma 1x） = 318px
+```
+
+**第二步：计算 Figma 1x 下的间距**
+
+```
+列间距 = (容器宽 − item宽 × 列数) ÷ (列数 − 1)
+       = (880 − 144×5) ÷ 4 = 160 ÷ 4 = 40px
+
+行间距 = (容器高 − item高 × 行数) ÷ (行数 − 1)
+       = (318 − 144×2) ÷ 1 = 30px
+```
+
+**第三步：乘以 scale 得到 FGUI 值**
+
+```
+colGap  = 40 × 2 = 80
+lineGap = 30 × 2 = 60
+```
+
+**验证**：`list_col_gap` / `list_row_gap` 填 FGUI 单位（已乘 scale），不是 Figma 原始值。
 
 ---
 
