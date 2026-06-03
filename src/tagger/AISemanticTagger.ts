@@ -621,6 +621,35 @@ export class AISemanticTagger {
             '',
         ];
 
+        // ── 检测摘要截断（moreSiblings）并生成警告 ──────────────────────────
+        const truncatedNodes: Array<{ id: string; name: string; hidden: number }> = [];
+        const detectTruncation = (nodes: NodeSummary[]) => {
+            for (const n of nodes) {
+                if (n.moreSiblings && n.moreSiblings > 0) {
+                    truncatedNodes.push({ id: n.id, name: n.name, hidden: n.moreSiblings });
+                }
+                if (n.children) detectTruncation(n.children);
+            }
+        };
+        detectTruncation(summaries);
+
+        const truncationWarningLines: string[] = truncatedNodes.length > 0 ? [
+            '## ⚠️ 重要警告：节点摘要存在截断',
+            '',
+            '> **以下节点的子节点列表因摘要宽度限制被截断，摘要中未显示所有子节点。**',
+            '> 标注时必须参考 `figma_debug.json` 获取完整子节点列表，不得遗漏。',
+            '',
+            '| 父节点ID | 父节点名 | 被截断的子节点数 |',
+            '|---|---|---|',
+            ...truncatedNodes.map(t => `| \`${t.id}\` | ${t.name} | **${t.hidden} 个子节点未显示** |`),
+            '',
+            '> **操作要求**：',
+            '> 1. 对上表中每个父节点，读取 `figma_debug.json` 中该节点的完整 `children` 列表',
+            '> 2. 对每个被截断的子节点也进行标注（哪怕只标 `semantic_type: "Component"`）',
+            '> 3. 特别检查截断节点中是否有 **List、按钮组、内容面板** 等关键 UI 区域',
+            '',
+        ] : [];
+
         // 写 Prompt 说明文件
         const promptPath = path.join(packagePath, 'ai_input_prompt.md');
         const promptContent = [
@@ -634,6 +663,7 @@ export class AISemanticTagger {
             `4. 将结果保存为 \`${packagePath}/semantic_tags.json\``,
             '5. 再次运行 `bun run convert <figma_url>` 自动读取标注结果',
             '',
+            ...truncationWarningLines,
             ...thumbLines,
             '## 分析重点',
             '',
@@ -644,12 +674,25 @@ export class AISemanticTagger {
             '- **导航菜单项**（图标 + 文字的重复单元）→ 识别为 `Label`，标注 `icon` 和 `title` 子节点',
             '- **选项卡按钮**（横向排列的多个按钮）→ 识别为 `Button`',
             '',
+            '### `semantic_type: "Image"` 使用规范（强制整体 SSR）',
+            '',
+            '以下情况应标注为 `Image`，代码会强制对整个节点进行一次 Figma SSR，输出单张 PNG：',
+            '- 纯装饰性背景层（星形/几何图案叠加、无交互子节点）',
+            '- 含 Mask 遮罩但**无文字、无按钮**的装饰层',
+            '- 版权标注栏等重复装饰结构',
+            '',
+            '以下情况**禁止**标注为 `Image`，应标注为 `Component`（让代码决定是否 SSR）：',
+            '- 含文字子节点（Text）',
+            '- 含按钮/图标等可交互子节点',
+            '- 含 List/Label/Button 等扩展组件子节点',
+            '',
             '### 层级调整（reparent）判断',
             '',
             '请检查是否存在"层级放错了位置"的节点，典型情况：',
             '- **弹窗底部按钮栏**：与弹窗 Frame 同级，但 absoluteBoundingBox 在弹窗范围内 → `reparent` 到弹窗',
             '- **页面内的子面板**：某个 Frame 在视觉上是另一个大 Frame 的一部分，但 Figma 中是兄弟节点 → `reparent` 到大 Frame',
             '- **判断依据**：看 `w/h/xy` 是否完全落在目标父节点的范围内，且名称语义上有归属关系',
+            '- **特别注意**：按钮/交互组件藏在装饰 Mask_group 内 → 检查 `absoluteBoundingBox` 是否超出装饰层范围，是则 `reparent` 到顶层',
             '- 不确定时**不要** reparent，保持原始层级，在 risks 中说明',
             '',
             '## System Prompt（规则上下文）',

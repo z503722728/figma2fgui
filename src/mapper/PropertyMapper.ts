@@ -114,7 +114,7 @@ export class PropertyMapper {
             attr.strokeSize = (parseFloat(s.strokeSize) * FGUI_SCALE).toString();
             attr.strokeColor = this.formatColor(s.strokeColor || "#000000");
         }
-        if (node.width > 0 && node.height > 0) attr.autoSize = "none";
+        // autoSize 不输出，FGUI 默认自动适配字体大小
     }
 
     private mapLoaderProperties(node: UINode, attr: Record<string, string>): void {

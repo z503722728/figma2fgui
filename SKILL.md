@@ -2,12 +2,13 @@
 name: design2fgui
 description: >
   Figma → FairyGUI (FGUI) 转换工具。
-  用户提供 Figma 链接，AI（你）作为主 Agent 协调两个子 Agent 完成转换：
-  1. AnalyzeAgent：下载节点树 + 界面截图，动态生成 project-rules.json
-  2. ConvertAgent：根据动态规则执行转换，生成 FGUI XML 包
+  用户提供 Figma 链接，AI（你）作为主 Agent 协调子 Agent 完成转换：
+  1. AnalyzeAgent（CLI）：下载节点树 + 界面截图，生成摘要文件
+  2. 主 Agent（你）：读取摘要 + 截图，调用 code-explorer 子 Agent 补全截断节点，生成 semantic_tags.json 和 project-rules.json
+  3. ConvertAgent（CLI）：根据标注文件执行转换，生成 FGUI XML 包
   
   整个流程在 IDE 内完成，无需手动编辑配置文件。
-version: "1.0.0"
+version: "1.1.0"
 ---
 
 # design2fgui — IDE AI 驱动的 Figma → FGUI 转换
@@ -20,26 +21,78 @@ version: "1.0.0"
 
 收到 Figma URL 后，按以下顺序执行：
 
-### 第一步：调用 AnalyzeAgent
+### 第一步：调用 AnalyzeAgent（CLI）
 
 ```bash
-bun run analyze <figma_url>
+bun src/analyze.ts <figma_url>
 ```
+
+> ⚠️ 必须在 design2fgui 项目目录下执行，URL 中的 `&` 符号会被 shell 截断，使用简化 URL 格式：
+> `https://www.figma.com/design/{fileKey}/x?node-id={nodeId}`
 
 这会生成：
-- `{output}/ai_input_summary.json` — 节点树摘要（depth≤5）
-- `{output}/ai_input_prompt.md` — 含界面截图 URL + 分析任务
-- `{output}/figma_debug.json` — 原始 Figma 数据缓存
+- `{output}/ai_input_summary.json` — 节点树摘要（depth≤5，可能有截断）
+- `{output}/ai_input_prompt.md` — 含界面截图 + 分析任务 + **截断警告**
+- `{output}/figma_debug.json` — 原始 Figma 数据缓存（完整节点树）
+- `{output}/thumbnail.png` — 节点预览截图
 
-**然后你读取 `ai_input_prompt.md`**（含截图 + 节点摘要），分析 UI 结构，生成 `project-rules.json` 和 `semantic_tags.json`，保存到同一目录。
+### 第二步：读取 prompt + 处理截断节点
 
-### 第二步：调用 ConvertAgent
+**你读取 `ai_input_prompt.md`**，其中可能包含截断警告表格，例如：
 
-```bash
-bun run convert-only <figma_url>
+```
+| `2:1293` | 主体 | **5 个子节点未显示** |
 ```
 
-读取第一步生成的两个文件，执行转换，输出 FGUI 包。
+遇到截断时，**立即派发 code-explorer 子 Agent** 查询被截断节点的完整子节点：
+
+```
+Task(subagent_name="code-explorer", prompt="
+  读取 {output}/figma_debug.json，找到节点 ID 为 '2:1293' 的节点，
+  列出其所有直接子节点的 id、name、type、absoluteBoundingBox（width/height/x/y）。
+  同时检查每个子节点是否包含 children，如有则列出第一层子节点。
+  不需要读取其他文件。
+")
+```
+
+子 Agent 返回完整子节点列表后，结合截图和摘要中已有信息，生成完整标注。
+
+### 第三步：生成标注文件
+
+生成两个文件并保存到同一目录：
+
+**`project-rules.json`**（覆盖静态规则）和 **`semantic_tags.json`**（节点语义标注）
+
+详见下方"产出规范"章节。
+
+### 第四步：调用 ConvertAgent（CLI）
+
+```bash
+bun src/convert-only.ts https://www.figma.com/design/{fileKey}/x?node-id={nodeId}
+```
+
+读取第三步生成的两个文件，执行转换，输出 FGUI 包。
+
+---
+
+## 何时使用子 Agent（code-explorer）
+
+以下情况必须派发 code-explorer 子 Agent，不要自己读取大文件：
+
+| 情况 | 子 Agent 任务 |
+|---|---|
+| `ai_input_prompt.md` 中出现截断警告 | 查询 `figma_debug.json` 中被截断父节点的完整 children |
+| 某节点的 `absoluteBoundingBox` 坐标超出其父节点范围 | 查询该节点及其父节点的坐标，判断是否需要 reparent |
+| 需要确认某节点是否含有 Text/Button 等特殊子孙节点 | 深度查询指定节点的子孙节点类型 |
+| `figma_debug.json` 体积超过 500KB | 禁止直接 read_file，必须通过子 Agent 精确查询 |
+
+**子 Agent 调用模板**：
+```
+Task(
+  subagent_name="code-explorer",
+  prompt="读取 {绝对路径}/figma_debug.json，[具体查询任务]。只输出所需字段，不读取其他文件。"
+)
+```
 
 ---
 
@@ -88,12 +141,13 @@ bun run convert-only <figma_url>
 [
   {
     "node_id": "节点ID",
-    "semantic_type": "Button | Slider | Label | Component | ...",
+    "semantic_type": "Button | Slider | Label | Component | Image | ...",
     "fgui_name": "语义化组件名（英文，无空格）",
     "children_roles": {
       "子节点ID": "title | icon | bar | grip | bg"
     },
     "state_pages": { "0": "normal", "1": "on/hover/..." },
+    "reparent": { "new_parent": "目标父节点ID", "role": "可选角色名" },
     "risks": ["不确定的地方"]
   }
 ]
@@ -102,6 +156,18 @@ bun run convert-only <figma_url>
 ---
 
 ## 分析时的关键判断规则
+
+### `semantic_type: "Image"` 使用规范（重要）
+
+**应标注为 `Image`**（代码会强制整体 SSR 成一张 PNG）：
+- 纯装饰性背景层（星形/几何图案叠加、**无文字、无按钮**子节点）
+- 含 Mask 遮罩但无交互内容的装饰层
+- 版权标注栏等重复装饰结构
+
+**禁止标注为 `Image`**，应标注为 `Component`：
+- 含文字（Text）子节点
+- 含按钮/图标等可交互子节点
+- 含 List/Label/Button 等扩展组件子节点
 
 ### Toggle 开关识别
 - 形态：含 `Ellipse`（圆形滑块）+ `Rectangle`（轨道）的小组件（高度约 30-80px）
@@ -119,29 +185,29 @@ bun run convert-only <figma_url>
 
 ### 背景节点（坐标原点）
 - 明确列出哪些节点是背景节点（名称放入 `backgroundNodeNames`）
-- 背景节点是面积最大、覆盖整个组件的底层矩形/图形
-- **不要**把按钮、装饰元素误标为背景
+- 背景节点是面积最大、覆盖整个组件的底层矩形/图形（面积 ≥ 容器 60%）
+- **不要**把局部装饰层、header 误标为背景
 
-### 重复组件合并
-- 相同结构的多个实例 → 提取为同一组件，在 `componentGroups` 中描述
-- 颜色/状态差异 → `state_pages` 多状态，不是多个不同组件
+### 按钮藏在装饰层内（reparent）
+- 检查 `absoluteBoundingBox`：若按钮坐标超出其父 Mask_group 范围 → `reparent` 到正确的父容器
+- 典型场景：底部按钮栏被设计师放在背景装饰层的 children 里
 
 ---
 
 ## 转换管线工作原理
 
 ```
-bun run analyze <url>
+bun src/analyze.ts <url>
         ↓
-  下载 Figma 数据 + 生成摘要文件
+  下载 Figma 数据 + 生成摘要文件（含截断警告）
         ↓
-  [你在 IDE 里读 ai_input_prompt.md]
-  看截图 + 看节点摘要 → 理解 UI 结构
+  [主 Agent 读 ai_input_prompt.md]
+  若有截断警告 → 派发 code-explorer 子 Agent 查询 figma_debug.json
         ↓
   生成 project-rules.json   ← 动态覆盖 rules/*.json
   生成 semantic_tags.json   ← 节点语义标注
         ↓
-bun run convert-only <url>
+bun src/convert-only.ts <url>
         ↓
   读取 project-rules.json + semantic_tags.json
   执行转换：解析 → 提取子组件 → 下载图片 → 生成 XML
@@ -156,11 +222,12 @@ bun run convert-only <url>
 ```
 导入 FairyGUI 后发现问题
         ↓
-你（IDE AI）查看 handoff.yaml（决策日志）
+主 Agent 查看 handoff.yaml（决策日志）
         ↓
+若需要查询原始节点 → 派发 code-explorer 子 Agent 查询 figma_debug.json
 定位问题节点 → 修改 semantic_tags.json 或 project-rules.json
         ↓
-bun run convert-only <url>   ← 不需要重新下载，直接重跑转换
+bun src/convert-only.ts <url>   ← 不需要重新下载，直接重跑转换
         ↓
 验证修复
 ```
@@ -185,8 +252,8 @@ design2fgui/
 │   ├── pipeline-config.json      # scale、批次参数等（通常不需要覆盖）
 │   └── ...
 └── src/
-    ├── analyze.ts                # AnalyzeAgent CLI（bun run analyze）
-    ├── cli.ts                    # ConvertAgent CLI（bun run convert-only）
+    ├── analyze.ts                # AnalyzeAgent CLI（bun src/analyze.ts）
+    ├── convert-only.ts           # ConvertAgent CLI（bun src/convert-only.ts）
     └── index.ts                  # 核心转换管线（run() 函数）
 ```
 

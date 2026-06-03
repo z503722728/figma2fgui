@@ -220,6 +220,17 @@ export function isBackgroundNode(nodeName: string): boolean {
 }
 
 /**
+ * 判断节点名是否是 project-rules.backgroundNodeNames 精确指定的背景节点。
+ * 精确配置的背景节点在 justifyComponentLayout 中跳过面积校验（因为设计师可能故意让背景小于容器）。
+ */
+export function isExplicitBackgroundNode(nodeName: string): boolean {
+    if (!_projectRules?.backgroundNodeNames?.length) return false;
+    const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, '_');
+    const name = normalize(nodeName);
+    return _projectRules.backgroundNodeNames.some(n => name === normalize(n));
+}
+
+/**
  * 获取坐标归零阈值。
  * 优先级：project-rules.coordZeroThreshold > rules/pipeline-config.json
  */

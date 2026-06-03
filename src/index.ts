@@ -10,7 +10,7 @@ import { ImagePipeline } from './ImagePipeline';
 import { UINode, ResourceInfo } from './models/UINode';
 import { sanitizeFileName, FGUI_SCALE } from './Common';
 import { AISemanticTagger } from './tagger/AISemanticTagger';
-import { loadProjectRules, isBackgroundNode, Rules } from './rules/RuleLoader';
+import { loadProjectRules, isBackgroundNode, isExplicitBackgroundNode, Rules } from './rules/RuleLoader';
 
 dotenv.config();
 
@@ -206,17 +206,33 @@ export async function run(opts: RunOptions): Promise<void> {
         // 优先匹配名称完全等于 "bg" 的节点（AI 标注的标准角色名）
         // 其次匹配 rules/exclude-names.json backgroundDetection 关键词
         // 但要求面积最大且名称不含其他语义前缀（排除 bg_glow、bg_mask 等修饰词）
+        // ⚠️ 尺寸约束：背景节点尺寸必须 >= 容器自身尺寸的 60%，避免误选局部装饰层
+        const compArea = comp.width * comp.height;
         let bgNode: UINode | undefined;
         let maxArea = 0;
         comp.children.forEach(c => {
             const nameLow = c.name.toLowerCase();
             // 精确匹配 "bg" 或以 "bg_" 开头但不是 bg_glow/bg_mask/bg_watermark 等装饰词
             const isExactBg = nameLow === 'bg';
-            const isDecoName = ['bg_glow', 'bg_mask', 'bg_watermark', 'bg_gradient', 'bg_decoration'].includes(nameLow);
+            const isExplicit = isExplicitBackgroundNode(c.name);
+            const isDecoName = !isExplicit && ['bg_glow', 'bg_mask', 'bg_watermark', 'bg_gradient', 'bg_decoration', 'bg_texture', 'bg_highlight'].includes(nameLow);
             const isBgLike = !isDecoName && isBackgroundNode(c.name);
-            if (isExactBg || isBgLike) {
+            if (isExactBg || isBgLike || isExplicit) {
                 const area = c.width * c.height;
-                if (!bgNode || area > maxArea) { bgNode = c; maxArea = area; }
+                // 尺寸校验：候选背景节点面积必须 >= 容器面积的 60%（避免误选局部装饰层）
+                // 例外：project-rules.backgroundNodeNames 精确指定的节点跳过面积校验
+                const isExplicit = isExplicitBackgroundNode(c.name);
+                const isSizeCompatible = isExplicit || compArea === 0 || (area / compArea) >= 0.60;
+                if (isSizeCompatible) {
+                    // 精确配置 > 面积更大：精确指定的节点优先于推断节点，相同来源时取面积更大的
+                    const prevExplicit = bgNode ? isExplicitBackgroundNode(bgNode.name) : false;
+                    if (!bgNode || (!prevExplicit && isExplicit) || (prevExplicit === isExplicit && area > maxArea)) {
+                        bgNode = c;
+                        maxArea = area;
+                    }
+                } else if (!isSizeCompatible && (isExactBg || isBgLike || isExplicit)) {
+                    console.warn(`⚠️ 背景候选 "${c.name}" 尺寸过小（${c.width}x${c.height} vs 容器 ${comp.width}x${comp.height}），跳过 justify`);
+                }
             }
         });
 
@@ -278,22 +294,20 @@ export async function run(opts: RunOptions): Promise<void> {
                     'Button', 'Label', 'Slider', 'ProgressBar', 'ComboBox', 'List'
                 ].includes(compRootFn.extention ?? '');
 
-                // 💡 List item template：整体 SSR 成一张图（含圆角背景 + 图片遮罩）
-                const isListItem = !!(compRootFn as any)._isListItem;
-
-                // 💡 AI 明确标注为 Image 的组件（semanticType=Image）：强制整体 SSR，不展开子节点
+                // 💡 AI 明确标注为 Image 的组件（semanticType=Image）：最高优先级，强制整体 SSR
+                // 无论是否含文字/形状，都不展开子节点，直接对整个组件做一次 Figma SSR
                 const isSemanticImage = (compRootFn as any).semanticType === 'Image';
 
-                if (!isPureShape || isExtensionComp) {
-                    matchExistingPngs([compRootFn]);
-                    pipeline.scanAndEnqueue([compRootFn], allResources);
-                } else if (isSemanticImage) {
-                    // 纯形状但 AI 明确标注为 Image → 强制整体 SSR（同 _mergeWithParent 逻辑）
+                if (isSemanticImage) {
+                    // AI 明确要求整体 SSR → 不展开，_mergeWithParent 触发叶节点 SSR
                     (compRootFn as any)._mergeWithParent = true;
                     matchExistingPngs([compRootFn]);
                     pipeline.scanAndEnqueue([compRootFn], allResources);
                     console.log(`🖼️ 强制 SSR: ${res.name}（AI 标注 Image）`);
-                } else if (isListItem) {
+                } else if (!isPureShape || isExtensionComp) {
+                    matchExistingPngs([compRootFn]);
+                    pipeline.scanAndEnqueue([compRootFn], allResources);
+                } else if ((compRootFn as any)._isListItem) {
                     // List item template：
                     // 有 _variantLayers → 保留子节点，走正常扫描流程（bg 子节点各自下载）
                     // 无 _variantLayers → 整体 SSR 成一张图

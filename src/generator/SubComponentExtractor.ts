@@ -232,6 +232,9 @@ export class SubComponentExtractor {
     }
 
     private collectCandidatesRecursive(node: UINode): void {
+        // Image 类型节点直接作为图片资源，不提取为独立 component
+        if (node.type === ObjectType.Image || (node as any).semanticType === 'Image') return;
+
         if (node.visible === false) {
             const nameLow = node.name.toLowerCase();
             const stateKeywords = ['hover', 'pressed', 'down', 'selected', 'checked', 'disabled', '悬停', '按下', '选中'];
@@ -257,7 +260,9 @@ export class SubComponentExtractor {
 
         // 纯形状组：只有非扩展类型才跳过提取（让 SSR 整体渲染）
         // 例外：AI 明确标注了 semanticType 的节点（如 GachaItem），即使全是形状也要提取为独立组件
-        const hasSemanticTag = !!(node as any).semanticType;
+        // ⚠️ 例外的例外：semanticType=Image 的节点不应提取为独立 component，
+        //   它就是一张图，直接在父组件 displayList 里作为 <image> 引用即可。
+        const hasSemanticTag = !!(node as any).semanticType && (node as any).semanticType !== 'Image';
         if (!isExtensionType && !hasSemanticTag && this.allDescendantsAreShapes(node)) return;
 
         if (!isExtensionType && !hasSemanticTag && this.hasMaskDescendants(node)) return;
