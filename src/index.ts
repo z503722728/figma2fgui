@@ -8,6 +8,7 @@ import { SubComponentExtractor } from './generator/SubComponentExtractor';
 import { FigmaClient } from './FigmaClient';
 import { ImagePipeline } from './ImagePipeline';
 import { UINode, ResourceInfo } from './models/UINode';
+import { ObjectType } from './models/FGUIEnum';
 import { sanitizeFileName, FGUI_SCALE } from './Common';
 import { AISemanticTagger } from './tagger/AISemanticTagger';
 import { loadProjectRules, isBackgroundNode, isExplicitBackgroundNode, Rules } from './rules/RuleLoader';
@@ -390,6 +391,9 @@ export async function run(opts: RunOptions): Promise<void> {
             const compNode = extractedNodesMap.get(res.id) || JSON.parse(res.data) as UINode;
             const hasVisuals = compNode.styles.fillType || compNode.styles.strokeSize;
             const isListItemTemplate = !!(compNode as any)._isListItem;
+            // List 节点直接在父组件内联为 <list>，不生成独立 XML 文件
+            if (compNode.type === ObjectType.List || compNode.extention === 'List') continue;
+
             // List item template 即使子节点清空也需要生成 XML（有图片 src）
             if (!compNode.children?.length && !hasVisuals && !compNode.listItemTemplate && !isListItemTemplate && !compNode.src) continue;
 

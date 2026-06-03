@@ -26,6 +26,15 @@ const OVERRIDE_WRITERS: Partial<Record<ObjectType, OverrideWriter>> = {
             return attr;
         }
     },
+    [ObjectType.Label]: {
+        tagName: 'Label',
+        buildAttrs(overrides, buildId) {
+            const attr: Record<string, any> = {};
+            if (overrides.title) attr.title = overrides.title;
+            if (overrides.icon) attr.icon = `ui://${buildId}${overrides.icon}`;
+            return attr;
+        }
+    },
     [ObjectType.ProgressBar]: {
         tagName: 'ProgressBar',
         buildAttrs(overrides, _buildId) {

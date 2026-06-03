@@ -283,12 +283,17 @@ export class SubComponentExtractor {
             const isCheckOrRadio = isExtensionType &&
                 node.type === ObjectType.Button &&
                 (node.buttonMode === 'Check' || node.buttonMode === 'Radio');
-            let hash = this.calculateStructuralHash(node, isCheckOrRadio);
+
+            // Label：忽略 title 文本差异，用结构哈希合并同结构菜单项
+            // 差异通过父组件的 <Label title="..."/> override 输出，无需各自独立生成
+            const isLabel = node.type === ObjectType.Label;
+
+            let hash = this.calculateStructuralHash(node, isCheckOrRadio, isLabel);
 
             // 💡 AI 明确标注了语义名称（fgui_name/semanticType）的节点，
             // 将名称加入哈希，防止不同名称的同结构组件被错误合并。
-            // 例如：Btn_ArrowLeft 与 Btn_ArrowRight 结构相同但语义不同，必须各自独立生成。
-            if ((node as any).semanticType && node.name) {
+            // 例外：Label 类型节点不加入名称（同结构菜单项只需一个模板）
+            if ((node as any).semanticType && node.name && !isLabel) {
                 hash = JSON.stringify([node.name, hash]);
             }
 
@@ -579,10 +584,18 @@ export class SubComponentExtractor {
             if (curr.children) curr.children.forEach(findChanges);
         };
         findChanges(node);
+
+        // Label 类型补充：若上面没找到 title，取第一个 Text 子节点作为 title
+        // 原因：原始节点名可能是中文内容（如"我是列表壹"），不含 title 关键词
+        if (node.type === ObjectType.Label && !overrides['title']) {
+            const firstText = node.children?.find(c => c.type === ObjectType.Text && c.text);
+            if (firstText) overrides['title'] = firstText.text;
+        }
+
         return overrides;
     }
 
-    private calculateStructuralHash(node: UINode, ignoreColor = false): string {
+    private calculateStructuralHash(node: UINode, ignoreColor = false, ignoreText = false): string {
         const parts: any[] = [];
 
         if (!ignoreColor) {
@@ -592,8 +605,11 @@ export class SubComponentExtractor {
             importantStyles.forEach(k => {
                 if (node.styles[k]) parts.push(k, JSON.stringify(node.styles[k]));
             });
-            if (node.children?.length > 0) {
-                node.children.forEach(c => parts.push(this.calculateStructuralHash(c, false)));
+            // ignoreText=true（Label 模式）：跳过 Text 节点的文本内容，只比较类型和尺寸
+            if (node.type !== ObjectType.Text || !ignoreText) {
+                if (node.children?.length > 0) {
+                    node.children.forEach(c => parts.push(this.calculateStructuralHash(c, false, ignoreText)));
+                }
             }
         } else {
             // 结构模式（Check/Radio Button 合并开/关状态实例）：
