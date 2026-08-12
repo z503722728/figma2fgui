@@ -1,3 +1,5 @@
+
+
 # design2fgui — Figma → FairyGUI AI 驱动转换引擎
 
 将 Figma 云端设计稿转换为 FairyGUI (FGUI) 工程包。粘贴一个 Figma 链接，IDE AI 作为主 Agent 自动协调完成语义标注，输出可直接导入 FairyGUI 编辑器的 XML 包。
@@ -45,17 +47,17 @@ OUTPUT_PATH=./FGUIProject/assets              # 输出目录（可选）
 **唯一入口：将 Figma 链接粘贴给 IDE AI（推荐）**
 
 IDE AI 作为主 Agent，自动完成以下全流程：
-1. 调用 `bun src/analyze.ts <url>` 下载节点数据 + 生成摘要截图
+1. 调用 `bun run analyze <url>` 下载节点数据 + 生成摘要截图
 2. 读取 `ai_input_prompt.md`，若有截断警告则派发 `code-explorer` 子 Agent 补全节点
 3. 生成 `semantic_tags.json` 和 `project-rules.json`
-4. 调用 `bun src/convert-only.ts <url>` 执行转换，输出 FGUI 包
+4. 调用 `bun run convert-only <url>` 执行转换，输出 FGUI 包
 
 > ⚠️ URL 中的 `&` 符号会被 shell 截断，使用简化格式：`https://www.figma.com/design/{fileKey}/x?node-id={nodeId}`
 
 **纯规则模式（无需 AI 标注）**
 
 ```bash
-bun src/convert-only.ts "https://www.figma.com/design/{fileKey}/name?node-id=88-3805"
+bun run convert-only "https://www.figma.com/design/{fileKey}/name?node-id=88-3805"
 ```
 
 ---
@@ -63,7 +65,7 @@ bun src/convert-only.ts "https://www.figma.com/design/{fileKey}/name?node-id=88-
 ## 📋 完整流程说明
 
 ```
-bun src/analyze.ts <url>
+bun run analyze <url>
         ↓
   下载 Figma 节点数据 + 节点预览截图（thumbnail.png）
   生成 ai_input_prompt.md（含截断警告表格）
@@ -75,7 +77,7 @@ bun src/analyze.ts <url>
   生成 project-rules.json   ← 背景节点名、类型关键词覆盖等
   生成 semantic_tags.json   ← 每个节点的语义类型、fgui_name、children_roles
         ↓
-bun src/convert-only.ts <url>
+bun run convert-only <url>
         ↓
   读取标注文件 → 解析 → 提取子组件 → 下载图片 → 生成 XML
         ↓
@@ -291,7 +293,7 @@ FORCE_DOWNLOAD=false    # true = 强制重新下载所有图片（忽略缓存�
 若需查询原始节点 → 派发 code-explorer 子 Agent 查询 figma_debug.json
 定位问题节点 → 修改 semantic_tags.json 或 project-rules.json
         ↓
-bun src/convert-only.ts <url>   ← 不需要重新下载，直接重跑转换
+bun run convert-only <url>   ← 不需要重新下载，直接重跑转换
         ↓
 验证修复
 ```
